@@ -6,7 +6,8 @@ public class Composer : Gtk.Application {
     private Gtk.Button send_button;
     private Gtk.Button recall_button;
     private SocketConnection? connection;
-    private DataInputStream? input;
+    private InputStream? input;
+    private ByteArray incoming = new ByteArray ();
     private bool ready = false;
     private bool sending = false;
     private string last_source = "";
@@ -19,14 +20,8 @@ public class Composer : Gtk.Application {
     }
 
     protected override void activate () {
+        Granite.init ();
         var settings = Granite.Settings.get_default ();
-        var gtk_settings = Gtk.Settings.get_default ();
-        gtk_settings.gtk_application_prefer_dark_theme =
-            settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
-        settings.notify["prefers-color-scheme"].connect (() => {
-            gtk_settings.gtk_application_prefer_dark_theme =
-                settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
-        });
         var window = new Gtk.ApplicationWindow (this) {
             title = _("Rich Input"), default_width = 920, default_height = 740
         };
@@ -37,6 +32,10 @@ public class Composer : Gtk.Application {
         header.pack_end (source_toggle);
         window.titlebar = header;
         editor = new RichInput () {vexpand = true};
+        editor.dark = settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+        settings.notify["prefers-color-scheme"].connect (() => {
+            editor.dark = settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+        });
         source_toggle.bind_property ("active", editor, "source-mode", BindingFlags.SYNC_CREATE);
         mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
         // The source editor owns focus and all input. The VTE widget receives
@@ -61,7 +60,7 @@ public class Composer : Gtk.Application {
         send_button = new Gtk.Button.with_mnemonic (_("_Send")) {sensitive = false};
         send_button.add_css_class ("suggested-action");
         send_button.clicked.connect (submit);
-        recall_button = new Gtk.Button.with_label (_("Edit Last Prompt")) {sensitive = false};
+        recall_button = new Gtk.Button.with_mnemonic (_("_Edit Last Prompt")) {sensitive = false};
         recall_button.clicked.connect (() => {
             // Recall never silently overwrites an unfinished draft.
             if (editor.source () == "") editor.buffer.insert_at_cursor (last_source, -1);
@@ -83,6 +82,10 @@ public class Composer : Gtk.Application {
         window.child = root;
         var keys = new Gtk.EventControllerKey ();
         keys.key_pressed.connect ((key, code, modifiers) => {
+            if ((modifiers & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.q) {
+                window.close ();
+                return true;
+            }
             if ((modifiers & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.Return) {
                 submit ();
                 return true;
@@ -117,13 +120,11 @@ public class Composer : Gtk.Application {
         try {
             var client = new SocketClient ();
             connection = yield client.connect_async (new UnixSocketAddress (socket_path), null);
-            input = new DataInputStream (connection.input_stream);
+            input = connection.input_stream;
             yield write_message ("hello");
             while (connection != null) {
-                size_t length;
-                string? line = yield input.read_line_async (Priority.DEFAULT, null, out length);
+                string? line = yield read_frame ();
                 if (line == null) break;
-                if (length > 2 * 1024 * 1024) throw new IOError.INVALID_DATA ("Frame too large");
                 var parser = new Json.Parser ();
                 parser.load_from_data (line);
                 var message = parser.get_root ().get_object ();
@@ -164,6 +165,26 @@ public class Composer : Gtk.Application {
         } catch (Error error) {
             disconnect_peer ();
             feedback.label = _("Connection failed: %s").printf (error.message);
+        }
+    }
+
+    private async string? read_frame () throws Error {
+        while (true) {
+            for (uint i = 0; i < incoming.len; i++) {
+                if (incoming.data[i] != '\n') continue;
+                uint8[] frame = new uint8[i + 1];
+                Memory.copy (frame, incoming.data, i);
+                incoming.remove_range (0, i + 1);
+                string line = (string) frame;
+                if (!line.validate ()) throw new IOError.INVALID_DATA ("Expected UTF-8");
+                return line;
+            }
+            // Bound allocation before waiting for a delimiter, rather than
+            // checking the length only after an unbounded read_line operation.
+            if (incoming.len > 2 * 1024 * 1024) throw new IOError.INVALID_DATA ("Frame too large");
+            var chunk = yield input.read_bytes_async (65536);
+            if (chunk.get_size () == 0) return null;
+            incoming.append (chunk.get_data ());
         }
     }
 

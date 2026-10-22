@@ -3,7 +3,7 @@ void main (string[] args) {
     Test.init (ref args);
     Test.add_func ("/editor/source-and-undo", () => {
         var editor = new RichInput ();
-        string source = "# Olá\n**bold** and `fish`\n終\t'quoted'\n\n";
+        string source = "# Olá\ne\u0301 **bold** and `fish`\n終\t'quoted'\n\n";
         editor.buffer.text = source;
         assert (editor.source () == source);
         Gtk.TextIter start, end;

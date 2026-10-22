@@ -14,6 +14,7 @@ public class RichSpan : Object {
 public class RichInput : Gtk.TextView {
     public bool source_mode { get; set; default = false; }
     public bool fish_mode { get; set; default = false; }
+    public bool dark { get; set; default = false; }
     private bool restyling = false;
 
     public RichInput () {
@@ -39,6 +40,10 @@ public class RichInput : Gtk.TextView {
         });
         notify["source-mode"].connect (restyle);
         notify["fish-mode"].connect (restyle);
+        notify["dark"].connect (() => {
+            buffer.tag_table.lookup ("string").foreground = dark ? "#8ff0a4" : "#25703c";
+            buffer.tag_table.lookup ("variable").foreground = dark ? "#99c1f1" : "#1c5eaa";
+        });
     }
 
     public string source () {
