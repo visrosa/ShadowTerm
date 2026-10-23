@@ -15,6 +15,7 @@ public class RichInput : Gtk.TextView {
     public bool source_mode { get; set; default = false; }
     public bool fish_mode { get; set; default = false; }
     public bool dark { get; set; default = false; }
+    public bool reveal_active_line { get; set; default = true; }
     private bool restyling = false;
 
     public RichInput () {
@@ -40,6 +41,7 @@ public class RichInput : Gtk.TextView {
         });
         notify["source-mode"].connect (restyle);
         notify["fish-mode"].connect (restyle);
+        notify["reveal-active-line"].connect (restyle);
         notify["dark"].connect (() => {
             buffer.tag_table.lookup ("string").foreground = dark ? "#8ff0a4" : "#25703c";
             buffer.tag_table.lookup ("variable").foreground = dark ? "#99c1f1" : "#1c5eaa";
@@ -147,7 +149,7 @@ public class RichInput : Gtk.TextView {
         foreach (var span in parse (text, fish_mode)) {
             buffer.get_iter_at_offset (out start, text.char_count (span.start));
             buffer.get_iter_at_offset (out end, text.char_count (span.end));
-            if (span.tag == "hidden" && (source_mode || start.get_line () == active_line)) continue;
+            if (span.tag == "hidden" && (source_mode || (reveal_active_line && start.get_line () == active_line))) continue;
             buffer.apply_tag_by_name (span.tag, start, end);
         }
         monospace = source_mode || fish_mode;

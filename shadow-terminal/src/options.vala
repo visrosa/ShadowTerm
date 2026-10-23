@@ -1,5 +1,5 @@
 namespace Shadow {
-    public const string VERSION = "0.0.1";
+    public const string VERSION = "0.0.2";
 
     public errordomain OptionError { INVALID }
 
@@ -18,6 +18,8 @@ namespace Shadow {
         public bool explicit_command = false;
         public bool configured = false;
         public bool cwd_specified = false;
+        public string input_mode = "auto";
+        public bool input_specified = false;
 
         public static Request parse (string[] args) throws Error {
             var r = new Request ();
@@ -42,10 +44,15 @@ namespace Shadow {
                 } else if (arg == "--hold") {
                     r.hold = true;
                     r.configured = true;
-                } else if (arg == "--session" || arg == "--cwd" || arg == "--title" || arg == "--size") {
+                } else if (arg == "--session" || arg == "--cwd" || arg == "--title" || arg == "--size" || arg == "--input") {
                     if (++i == args.length) throw new OptionError.INVALID ("Missing value for %s", arg);
                     string value = args[i];
                     if (arg == "--session") r.session = value;
+                    else if (arg == "--input") {
+                        if (value != "auto" && value != "composer" && value != "terminal")
+                            throw new OptionError.INVALID ("Input must be auto, composer or terminal");
+                        r.input_mode = value; r.input_specified = true; r.configured = true;
+                    }
                     else if (arg == "--cwd") {
                         r.cwd = Filename.canonicalize (value);
                         r.cwd_specified = true;
@@ -70,6 +77,8 @@ namespace Shadow {
                     throw new OptionError.INVALID ("Invalid session name: %s", r.session);
             if (!FileUtils.test (r.cwd, FileTest.IS_DIR))
                 throw new OptionError.INVALID ("Working directory does not exist: %s", r.cwd);
+            if (r.input_mode == "composer" && !r.supports_composer ())
+                throw new OptionError.INVALID ("Composer input requires an interactive fish command");
             if ((r.action == "hide" || r.action == "quit" || r.action == "list") && r.configured)
                 throw new OptionError.INVALID ("This action does not accept launch options");
             return r;
@@ -81,6 +90,22 @@ namespace Shadow {
             if (shell == null || shell == "") shell = "/bin/sh";
             return {shell};
         }
+
+        public bool supports_composer () {
+            string[] args = command.length > 0 ? command : argv ();
+            if (Path.get_basename (args[0]) != "fish") return false;
+            for (int i = 1; i < args.length; i++) {
+                string arg = args[i];
+                if (arg == "-C" || arg == "--init-command" || arg == "--init-cmd") { i++; continue; }
+                if (arg.has_prefix ("--command") || arg == "--no-execute" || arg == "--version" || arg == "--help") return false;
+                if (arg.has_prefix ("--init-command=") || arg.has_prefix ("--init-cmd=")) continue;
+                if (!arg.has_prefix ("-")) return false;
+                if (!arg.has_prefix ("--") && (arg.contains ("c") || arg.contains ("n") || arg.contains ("v") || arg.contains ("h"))) return false;
+            }
+            return true;
+        }
+
+        public bool composer_enabled () { return input_mode != "terminal" && supports_composer (); }
 
         public string encode () {
             var b = new Json.Builder ();
@@ -96,6 +121,8 @@ namespace Shadow {
             b.set_member_name ("explicit"); b.add_boolean_value (explicit_command);
             b.set_member_name ("configured"); b.add_boolean_value (configured);
             b.set_member_name ("cwd_specified"); b.add_boolean_value (cwd_specified);
+            b.set_member_name ("input_mode"); b.add_string_value (input_mode);
+            b.set_member_name ("input_specified"); b.add_boolean_value (input_specified);
             b.set_member_name ("argv"); b.begin_array ();
             foreach (string arg in argv ()) b.add_string_value (arg);
             b.end_array (); b.end_object ();
@@ -116,6 +143,8 @@ namespace Shadow {
             r.hide_on_blur = o.get_boolean_member ("blur"); r.hold = o.get_boolean_member ("hold");
             r.explicit_command = o.get_boolean_member ("explicit"); r.configured = o.get_boolean_member ("configured");
             r.cwd_specified = o.get_boolean_member ("cwd_specified");
+            r.input_mode = o.get_string_member ("input_mode");
+            r.input_specified = o.get_boolean_member ("input_specified");
             var a = o.get_array_member ("argv");
             string[] command = {};
             for (uint i = 0; i < a.get_length (); i++) command += a.get_string_element (i);
@@ -132,6 +161,7 @@ namespace Shadow {
             return (!cwd_specified || cwd == existing.cwd) &&
                 (width == 0 || width == existing.width) && (height == 0 || height == existing.height) &&
                 (!hide_on_blur || existing.hide_on_blur) && (!hold || existing.hold) &&
+                (!input_specified || input_mode == existing.input_mode) &&
                 (title == "Shadow Term" || title == existing.title);
         }
     }

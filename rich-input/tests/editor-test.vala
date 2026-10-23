@@ -30,5 +30,15 @@ void main (string[] args) {
         assert (spans[3].tag == "variable");
         assert (spans[4].tag == "option");
     });
+    Test.add_func ("/editor/readonly-presentation", () => {
+        var preview = new RichInput () {editable = false, reveal_active_line = false};
+        string source = "# Heading\n**strong** and `code`\n\n";
+        preview.buffer.text = source;
+        Gtk.TextIter start, end;
+        preview.buffer.get_bounds (out start, out end);
+        assert (preview.source () == source);
+        assert (preview.buffer.get_text (start, end, false) == "Heading\nstrong and code\n\n");
+        assert (preview.buffer.get_text (start, end, true) == source);
+    });
     Test.run ();
 }

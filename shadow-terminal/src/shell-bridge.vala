@@ -1,0 +1,21 @@
+namespace Shadow {
+    [DBus (name = "io.github.visrosa.Vibrant.Shell1")]
+    public class ShellBridge : Object {
+        private weak Host host;
+        public ShellBridge (Host host) { this.host = host; }
+
+        public string get_state (string session) throws DBusError, IOError {
+            return host.input_status (session);
+        }
+
+        public string take_input (string session, string token, int pid) throws DBusError, IOError {
+            return host.shell_window (session, pid).input_session.take (token);
+        }
+
+        public void report (string session, string token, int pid, string phase, string detail) throws DBusError, IOError {
+            var window = host.shell_window (session, pid);
+            window.input_session.report (token, phase, detail);
+            if (phase == "ready") window.shell_directory (detail);
+        }
+    }
+}

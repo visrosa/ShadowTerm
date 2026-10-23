@@ -25,12 +25,26 @@ namespace Shadow {
         private weak Host host;
         private Gtk.DropDown mode;
         private Gtk.ToggleButton compose_button;
+        public InputSession input_session = new InputSession ();
+        private bool shell_editor;
+        private Gtk.Button submit_button;
+        private Gtk.Button cancel_button;
+        private Gtk.Button recall_button;
+        private RichInput preview;
+        private Gtk.Revealer preview_card;
+        private string submitted_source = "";
+        private string last_source = "";
+        private bool enter_submission = false;
+        private bool previous_ready = false;
+        private string shell_cwd;
         public signal void ended ();
 
         public TerminalWindow (Host owner, Request config, string[] environment) {
             Object (application: owner);
             this.host = owner;
             this.request = config;
+            shell_cwd = config.cwd;
+            shell_editor = request.composer_enabled ();
             this.environment = environment;
             geometry = new Geometry (request.session);
             int width = request.width > 0 ? request.width : geometry.width;
@@ -55,18 +69,19 @@ namespace Shadow {
             terminal.set_scroll_on_output (false);
             var scroll = new Gtk.ScrolledWindow () {child = terminal, vexpand = true};
             editor = new RichInput ();
+            editor.fish_mode = shell_editor;
             var settings = Granite.Settings.get_default ();
             settings.notify["prefers-color-scheme"].connect (update_colors);
             update_colors ();
 
             var header = new Gtk.HeaderBar ();
             var new_button = new Gtk.Button.from_icon_name ("tab-new-symbolic") {tooltip_text = "New Terminal (Ctrl+Shift+N)"};
-            new_button.clicked.connect (() => host.new_terminal (request.cwd));
+            new_button.clicked.connect (() => host.new_terminal (shell_cwd));
             header.pack_start (new_button);
             var hide_button = new Gtk.Button.from_icon_name ("window-minimize-symbolic") {tooltip_text = "Hide Session (Ctrl+Shift+H)"};
             hide_button.clicked.connect (hide_session);
             header.pack_end (hide_button);
-            compose_button = new Gtk.ToggleButton.with_label ("Compose") {tooltip_text = "Show rich scratchpad (Ctrl+Shift+M)"};
+            compose_button = new Gtk.ToggleButton.with_label ("V Composer") {tooltip_text = "Show input editor (Ctrl+Shift+M)", active = shell_editor};
             header.pack_end (compose_button);
             set_titlebar (header);
 
@@ -74,6 +89,7 @@ namespace Shadow {
                 margin_start = 12, margin_end = 12, margin_top = 8, margin_bottom = 8
             };
             mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
+            mode.selected = shell_editor ? 1 : 0;
             mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
             var source = new Gtk.ToggleButton.with_label ("Show Source");
             source.bind_property ("active", editor, "source-mode", BindingFlags.SYNC_CREATE);
@@ -81,7 +97,18 @@ namespace Shadow {
             paste.clicked.connect (() => {
                 paste_draft ();
             });
-            tools.append (mode); tools.append (source); tools.append (paste);
+            recall_button = new Gtk.Button.with_label ("Recall Last") {sensitive = false};
+            recall_button.clicked.connect (() => {
+                if (editor.source () == "") editor.buffer.text = last_source;
+                editor.grab_focus ();
+            });
+            submit_button = new Gtk.Button.with_label ("Run") {visible = shell_editor, sensitive = false};
+            submit_button.add_css_class ("suggested-action");
+            submit_button.clicked.connect (() => submit_command (false));
+            cancel_button = new Gtk.Button.with_label ("Cancel") {visible = false};
+            cancel_button.clicked.connect (() => input_session.reject ("Submission cancelled; draft retained"));
+            tools.append (mode); tools.append (source); tools.append (recall_button);
+            tools.append (paste); tools.append (cancel_button); tools.append (submit_button);
             var compose_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
             compose_box.append (tools);
             compose_box.append (new Gtk.ScrolledWindow () {child = editor, min_content_height = 140});
@@ -99,11 +126,29 @@ namespace Shadow {
             };
             footer.append (feedback); footer.append (restart);
             var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            preview = new RichInput () {editable = false, cursor_visible = false, reveal_active_line = false};
+            var preview_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            preview_box.append (new Gtk.Label ("Last input") {xalign = 0, margin_start = 12, margin_top = 6});
+            preview_box.append (new Gtk.ScrolledWindow () {child = preview, max_content_height = 110,
+                propagate_natural_height = true});
+            preview_card = new Gtk.Revealer () {child = preview_box, transition_duration = 0};
+            root.append (preview_card);
             root.append (scroll); root.append (composer); root.append (footer);
             set_child (root);
 
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
+                if (key == Gdk.Key.Escape && editor.has_focus && input_session.pending) {
+                    input_session.reject ("Submission cancelled; draft retained");
+                    return true;
+                }
+                if (shell_editor && editor.has_focus && key == Gdk.Key.Return &&
+                    (state & Gdk.ModifierType.SHIFT_MASK) == 0 && input_session.pending) return true;
+                if (shell_editor && editor.has_focus && key == Gdk.Key.Return &&
+                    (state & Gdk.ModifierType.SHIFT_MASK) == 0 && input_session.ready && !input_session.pending) {
+                    submit_command ((state & Gdk.ModifierType.CONTROL_MASK) == 0);
+                    return true;
+                }
                 if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) !=
                     (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) return false;
                 switch (Gdk.keyval_to_lower (key)) {
@@ -115,11 +160,14 @@ namespace Shadow {
                     } else terminal.copy_clipboard_format (Vte.Format.TEXT);
                     return true;
                 case Gdk.Key.v: terminal.paste_clipboard (); return true;
-                case Gdk.Key.n: host.new_terminal (request.cwd); return true;
+                case Gdk.Key.n: host.new_terminal (shell_cwd); return true;
                 case Gdk.Key.w: end_session (); return true;
                 case Gdk.Key.h: hide_session (); return true;
                 case Gdk.Key.m: compose_button.active = !compose_button.active; return true;
                 case Gdk.Key.Return: paste_draft (); return true;
+                case Gdk.Key.l:
+                    if (editor.source () == "") editor.buffer.text = last_source;
+                    compose_button.active = true; editor.grab_focus (); return true;
                 case Gdk.Key.plus: case Gdk.Key.equal:
                     terminal.font_scale = double.min (3, terminal.font_scale + 0.1); return true;
                 case Gdk.Key.minus: case Gdk.Key.underscore:
@@ -141,7 +189,10 @@ namespace Shadow {
                 }
             });
             notify["is-active"].connect (() => {
-                if (is_active) was_active = true;
+                if (is_active) {
+                    was_active = true;
+                    if (shell_editor && input_session.ready && composer.reveal_child) editor.grab_focus ();
+                }
                 else if (was_active && visible && request.hide_on_blur && blur_idle == 0) {
                     blur_idle = Idle.add (() => {
                         blur_idle = 0;
@@ -158,6 +209,7 @@ namespace Shadow {
                     title = "%s · %s".printf (child_title, request.session);
             });
             terminal.child_exited.connect ((status) => {
+                input_session.reset ();
                 child_pid = 0; running = false;
                 if (kill_timeout != 0) { Source.remove (kill_timeout); kill_timeout = 0; }
                 if (closing || !request.hold) finish ();
@@ -168,6 +220,58 @@ namespace Shadow {
                     restart.visible = true;
                 }
             });
+            editor.buffer.changed.connect (refresh_input);
+            input_session.changed.connect (refresh_input);
+            input_session.accepted.connect ((source_text) => {
+                last_source = source_text;
+                preview.fish_mode = editor.fish_mode;
+                preview.dark = editor.dark;
+                preview.buffer.text = source_text;
+                preview_card.reveal_child = true;
+                if (editor.source () == source_text) editor.buffer.text = "";
+                refresh_input ();
+            });
+            input_session.rejected.connect ((reason) => {
+                feedback.label = reason;
+                if (enter_submission && reason.has_prefix ("Incomplete") && editor.source () == submitted_source)
+                    editor.buffer.insert_at_cursor ("\n", -1);
+                if (is_active && composer.reveal_child) editor.grab_focus ();
+            });
+        }
+
+        private void refresh_input () {
+            submit_button.sensitive = shell_editor && running && input_session.ready && !input_session.pending && editor.source () != "";
+            cancel_button.visible = input_session.pending;
+            recall_button.sensitive = last_source != "" && editor.source () == "";
+            bool became_ready = input_session.ready && !previous_ready;
+            bool became_busy = !input_session.ready && previous_ready;
+            previous_ready = input_session.ready;
+            if (shell_editor) {
+                if (input_session.pending) feedback.label = "Waiting for fish to accept input…";
+                else if (input_session.ready) feedback.label = "fish ready · Enter runs · Shift+Enter adds a line · " + shell_cwd;
+                else if (running) feedback.label = "Program input uses the terminal · draft remains editable";
+                if (is_active) {
+                    if (became_ready && composer.reveal_child) editor.grab_focus ();
+                    else if (became_busy) terminal.grab_focus ();
+                }
+            }
+        }
+
+        private void submit_command (bool from_enter) {
+            if (!shell_editor || !running || !input_session.ready || input_session.pending || editor.source () == "") return;
+            try {
+                submitted_source = editor.source ();
+                enter_submission = from_enter;
+                input_session.prepare (submitted_source);
+                // fish's binding retrieves source over the bridge. No source,
+                // markup, quoting or terminal paste conversion occurs here.
+                terminal.feed_child ("\x1b\x0f".data);
+            } catch (IOError error) { feedback.label = error.message; }
+        }
+
+        public void shell_directory (string directory) {
+            shell_cwd = directory;
+            refresh_input ();
         }
 
         private bool owned_dialog_active (Host host) {
@@ -185,6 +289,7 @@ namespace Shadow {
         private void update_colors () {
             bool dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
             editor.dark = dark;
+            if (preview != null) preview.dark = dark;
             Gdk.RGBA foreground = {}, background = {};
             foreground.parse (dark ? "#f6f5f4" : "#242424");
             background.parse (dark ? "#1e1e1e" : "#ffffff");
@@ -202,6 +307,7 @@ namespace Shadow {
             spawning = true;
             restart.visible = false;
             spawn_cancel = new Cancellable ();
+            input_session.reset ();
             // Remove parent-terminal identity so children discover this VTE,
             // rather than sending Kitty-specific control to the outer terminal.
             string[] env = environment;
@@ -211,7 +317,16 @@ namespace Shadow {
             env = Environ.set_variable (env, "COLORTERM", "truecolor", true);
             env = Environ.set_variable (env, "TERM_PROGRAM", "shadow-term", true);
             env = Environ.set_variable (env, "TERM_PROGRAM_VERSION", VERSION, true);
-            terminal.spawn_async (Vte.PtyFlags.DEFAULT, request.cwd, request.command, env,
+            string[] command = request.command;
+            if (shell_editor) {
+                env = Environ.set_variable (env, "SHADOW_TERM_HELPER", SHELL_HELPER_PATH, true);
+                env = Environ.set_variable (env, "SHADOW_TERM_SESSION", request.session, true);
+                env = Environ.set_variable (env, "SHADOW_TERM_TOKEN", input_session.token, true);
+                env = Environ.set_variable (env, "SHADOW_TERM_INTEGRATION", FISH_INTEGRATION_PATH, true);
+                command = {request.command[0], "--init-command", "source \"$SHADOW_TERM_INTEGRATION\""};
+                foreach (string arg in request.command[1:request.command.length]) command += arg;
+            }
+            terminal.spawn_async (Vte.PtyFlags.DEFAULT, request.cwd, command, env,
                 SpawnFlags.SEARCH_PATH_FROM_ENVP, null, -1, spawn_cancel, (widget, pid, error) => {
                     spawning = false;
                     if (error != null) {
@@ -222,6 +337,7 @@ namespace Shadow {
                     child_pid = pid; running = true;
                     if (closing) { stop_child (); return; }
                     feedback.label = "%s · %s".printf (request.session, request.cwd);
+                    refresh_input ();
                 });
         }
 
@@ -236,7 +352,8 @@ namespace Shadow {
             if (closing) return;
             if (!visible) was_active = false;
             present ();
-            terminal.grab_focus ();
+            if (shell_editor && input_session.ready && composer.reveal_child) editor.grab_focus ();
+            else terminal.grab_focus ();
         }
 
         public void hide_session () {
@@ -269,6 +386,7 @@ namespace Shadow {
             if (closing) return;
             save_geometry ();
             closing = true;
+            input_session.reset ();
             visible = false;
             if (blur_idle != 0) { Source.remove (blur_idle); blur_idle = 0; }
             if (spawning) spawn_cancel.cancel ();
@@ -285,6 +403,7 @@ namespace Shadow {
 
     public class Host : Gtk.Application {
         private HashTable<string, TerminalWindow> sessions = new HashTable<string, TerminalWindow> (str_hash, str_equal);
+        private ShellBridge bridge;
 
         public Host () {
             Object (application_id: "io.github.visrosa.Vibrant.ShadowTerm",
@@ -294,8 +413,24 @@ namespace Shadow {
         protected override void startup () {
             base.startup ();
             Granite.init ();
+            bridge = new ShellBridge (this);
+            try { get_dbus_connection ().register_object<ShellBridge> ("/io/github/visrosa/Vibrant/Shell", bridge); }
+            catch (IOError error) { warning ("Shell integration unavailable: %s", error.message); }
             Unix.signal_add (Posix.Signal.TERM, () => { end_all (); return Source.CONTINUE; });
             Unix.signal_add (Posix.Signal.INT, () => { end_all (); return Source.CONTINUE; });
+        }
+
+        public TerminalWindow shell_window (string session, int pid) throws IOError {
+            var window = sessions.lookup (session);
+            if (window == null || window.closing || pid <= 0 || pid != window.child_pid)
+                throw new IOError.PERMISSION_DENIED ("Shell process is not attached to this session");
+            return window;
+        }
+
+        public string input_status (string session) throws IOError {
+            var window = sessions.lookup (session);
+            if (window == null || window.closing) throw new IOError.NOT_FOUND ("Session not found");
+            return window.input_session.pending ? "pending" : window.input_session.ready ? "ready" : "busy";
         }
 
         private void end_all () {
@@ -360,12 +495,13 @@ int main (string[] args) {
         stdout.printf ("Shadow Term %s\n", Shadow.VERSION); return 0;
     }
     if (args.length == 2 && (args[1] == "--help" || args[1] == "-h")) {
-        stdout.printf ("""Shadow Term 0.0.1 — interactive shell and command windows
+        stdout.printf ("""Shadow Term 0.0.2 — interactive shell and command windows
 Usage: shadow-term [OPTIONS] [-- COMMAND ARG...]
   --session NAME           Named session (default: default)
   --cwd DIRECTORY          Initial working directory (default: invoking directory)
   --title TITLE            Initial window title
   --size WIDTHxHEIGHT      Preferred initial size in logical pixels
+  --input MODE             auto (Composer for fish), composer, or terminal
   --hide-on-focus-loss     Hide after activated window loses focus
   --hold                   Keep output after the command exits; offer Restart
   --show | --hide | --toggle | --quit | --list

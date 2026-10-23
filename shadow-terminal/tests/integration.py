@@ -82,7 +82,7 @@ def worker(tmp):
 
     try:
         subprocess.run([str(ROOT / "build/editor-test")], env=env, check=True, timeout=5)
-        launch("--cwd", str(tmp), "--size", "900x620")
+        launch("--input", "terminal", "--cwd", str(tmp), "--size", "900x620")
         wait_for(lambda: window("default"), "initial terminal window")
         pid = wait_for(lambda: sessions().get("default", (None, 0))[1], "default shell PID")
         track(pid)
@@ -238,15 +238,20 @@ with (root/'raw-input').open('ab',buffering=0) as out:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--frontend", action="store_true", help="test Composer's interactive fish adapter")
     args = parser.parse_args()
     if args.worker:
-        worker(args.worker)
+        if args.frontend:
+            import runpy
+            runpy.run_path(str(Path(__file__).with_name("fish-frontend.py")))["worker"](args.worker)
+        else:
+            worker(args.worker)
         return
     # The CLI should give these answers even without any graphical session.
     clean_env = os.environ.copy()
     clean_env.pop("DISPLAY", None)
     clean_env.pop("WAYLAND_DISPLAY", None)
-    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.1"
+    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.2"
     assert subprocess.run([str(BINARY), "--size", "3x4"], env=clean_env, capture_output=True).returncode == 2
     with tempfile.TemporaryDirectory(prefix="shadow-term-test-") as directory:
         tmp = Path(directory)
@@ -255,6 +260,9 @@ def main():
                           '<policy context="default"><allow send_destination="*"/>'
                           '<allow receive_sender="*"/><allow own="*"/></policy></busconfig>')
         (tmp / "config").mkdir()
+        (tmp / "config/fish").mkdir()
+        (tmp / "config/fish/config.fish").write_text(
+            "function fish_prompt; printf '> '; end\nfunction fish_greeting; end\n")
         read_fd, write_fd = os.pipe()
         server = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1200x900x24",
                                    "-nolisten", "tcp", "-noreset"], pass_fds=(write_fd,),
@@ -268,11 +276,14 @@ def main():
                                 "LIBGL_ALWAYS_SOFTWARE": "1", "GTK_A11Y": "none", "GTK_USE_PORTAL": "0",
                                 "GIO_USE_VFS": "local", "XDG_CONFIG_HOME": str(tmp / "config"),
                                 "XDG_STATE_HOME": str(tmp / "state"), "SHELL": "/usr/bin/fish"}
-            result = subprocess.run(["dbus-run-session", "--config-file=" + str(config), "--", sys.executable,
-                                     str(Path(__file__).resolve()), "--worker", str(tmp)], env=env,
+            arguments = ["dbus-run-session", "--config-file=" + str(config), "--", sys.executable,
+                         str(Path(__file__).resolve()), "--worker", str(tmp)]
+            if args.frontend:
+                arguments.append("--frontend")
+            result = subprocess.run(arguments, env=env,
                                     capture_output=True, text=True, timeout=55)
             if result.returncode:
-                app_log = (tmp / "app.log").read_text(errors="replace") if (tmp / "app.log").exists() else ""
+                app_log = "\n".join(p.read_text(errors="replace") for p in (tmp / "app.log", tmp / "frontend.log") if p.exists())
                 raise AssertionError(result.stdout + result.stderr + "\n" + app_log)
             print(result.stdout.strip())
         finally:

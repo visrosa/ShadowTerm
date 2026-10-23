@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Use the shared private-display harness to test normal Composer-to-fish input."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import select
+import time
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("terminal_integration", HERE / "integration.py")
+harness = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(harness)
+
+
+def worker(tmp):
+    binary = str(harness.BINARY)
+    env = os.environ.copy()
+    logs = open(tmp / "frontend.log", "wb")
+    app = subprocess.Popen([binary, "--session", "composer", "--size", "1040x780"],
+                           env=env, cwd=tmp, stdout=logs, stderr=logs)
+
+    def xdo(*args, check=True):
+        return subprocess.run(["xdotool", *args], env=env, check=check,
+                              capture_output=True, text=True, timeout=4).stdout.strip()
+
+    def visible():
+        return xdo("search", "--onlyvisible", "--name", " · composer$", check=False)
+
+    def read(name):
+        p = tmp / name
+        return p.read_text() if p.exists() else ""
+
+    def text(source):
+        xdo("type", "--clearmodifiers", "--delay", "1", "--", source)
+
+    def command(source, marker):
+        text(source)
+        xdo("key", "Return")
+        harness.wait_for(lambda: read(marker), marker)
+        time.sleep(0.08)
+
+    def state():
+        result = subprocess.run(["gdbus", "call", "--session", "--dest", "io.github.visrosa.Vibrant.ShadowTerm",
+                                 "--object-path", "/io/github/visrosa/Vibrant/Shell", "--method",
+                                 "io.github.visrosa.Vibrant.Shell1.GetState", "composer"],
+                                env=env, capture_output=True, text=True, timeout=3)
+        return result.stdout.strip()
+
+    try:
+        wid = harness.wait_for(visible, "Composer fish window").splitlines()[0]
+        xdo("windowfocus", "--sync", wid)
+        harness.wait_for(lambda: "ready" in state(), "fish readiness event")
+        time.sleep(0.05)
+        command(f"printf normal > {tmp}/normal", "normal")
+        # Native fish syntax, redirection, pipelines and shell state survive.
+        command(f"printf lower | string upper > {tmp}/pipeline", "pipeline")
+        assert read("pipeline") == "LOWER"
+        command(f"false; printf '%s' $status > {tmp}/status", "status")
+        assert read("status") == "1"
+        text("false")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        command(f"printf '%s' $status > {tmp}/prior-status", "prior-status")
+        assert read("prior-status") == "1", read("prior-status")
+        capture = tmp / "capture.py"
+        capture.write_text("import json,sys\nfrom pathlib import Path\n"
+                           f"Path({str(tmp / 'argv')!r}).write_text(json.dumps(sys.argv[1:]))\n")
+        source = f"python3 {capture} '日本語 e\u0301' 'literal $value' 'first\nsecond\n'\n\n"
+        payload = tmp / "clipboard-source"
+        payload.write_text(source)
+        clipboard = subprocess.Popen([sys.executable, str(HERE / "clipboard.py"), str(payload)],
+                                     env=env, stdout=subprocess.PIPE, text=True)
+        try:
+            assert select.select([clipboard.stdout], [], [], 4)[0], "clipboard ownership"
+            assert clipboard.stdout.readline().strip() == "ready"
+            xdo("key", "ctrl+v")
+            time.sleep(0.1)
+            xdo("key", "ctrl+Return")
+            harness.wait_for(lambda: read("argv"), "Unicode and newline argv")
+        finally:
+            clipboard.terminate()
+            clipboard.wait(timeout=3)
+        assert json.loads(read("argv")) == ["日本語 e\u0301", "literal $value", "first\nsecond\n"], read("argv")
+        time.sleep(0.1)
+        # Incomplete Enter keeps the draft and adds a line, as fish would.
+        text("for value in one two")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        text(f"printf '%s\\n' $value >> {tmp}/loop")
+        xdo("key", "shift+Return")
+        text("end")
+        xdo("key", "ctrl+Return")
+        harness.wait_for(lambda: read("loop") == "one\ntwo\n", "multiline loop")
+        time.sleep(0.1)
+        # Recall proves Pane retained exact accepted input for re-editing.
+        xdo("key", "ctrl+shift+l")
+        xdo("key", "ctrl+Return")
+        harness.wait_for(lambda: read("loop") == "one\ntwo\none\ntwo\n", "accepted-source recall")
+        time.sleep(0.1)
+        # A partial native line must not be prefixed to a Composer submission.
+        xdo("key", "ctrl+shift+m")
+        text("KEEP_NATIVE_PREFIX ")
+        xdo("key", "ctrl+shift+m")
+        text(f"printf safe > {tmp}/guarded")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        assert not (tmp / "guarded").exists()
+        xdo("key", "ctrl+shift+m", "ctrl+u", "ctrl+shift+m", "ctrl+Return")
+        harness.wait_for(lambda: read("guarded") == "safe", "native-buffer guard retry")
+        time.sleep(0.1)
+        # A foreground program receives ordinary terminal input and EOF.
+        text(f"cat > {tmp}/program-input")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        text("ordinary program input")
+        xdo("key", "Return", "ctrl+d")
+        harness.wait_for(lambda: read("program-input") == "ordinary program input\n", "raw program input")
+        time.sleep(0.1)
+        command(f"printf restored > {tmp}/after-program", "after-program")
+        # A nested fish has no integration hooks and keeps ordinary input.
+        text("fish --no-config")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        command_text = f"printf nested > {tmp}/nested"
+        text(command_text)
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("nested") == "nested", "nested native fish")
+        text("exit")
+        xdo("key", "Return")
+        time.sleep(0.15)
+        command(f"printf outer > {tmp}/outer", "outer")
+        command(f"cd {tmp}; pwd > {tmp}/cwd-composer", "cwd-composer")
+        assert read("cwd-composer").strip() == str(tmp)
+        # Ctrl+C still interrupts a foreground job, then restores Composer.
+        text(f"sh -c 'echo $$ > {tmp}/interrupt-pid; exec sleep 30'")
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("interrupt-pid"), "interruptible foreground job")
+        xdo("key", "ctrl+c")
+        time.sleep(0.1)
+        command(f"printf interrupted > {tmp}/interrupted", "interrupted")
+        # Delay only this shell's binding to make pending-state races observable.
+        delayed = tmp / "delayed.fish"
+        delayed.write_text("functions --copy __vcom_submit __vcom_original\n"
+                           "set --global VCOM_TEST_DELAY 0.6\n"
+                           "function __vcom_submit\n"
+                           "    sleep $VCOM_TEST_DELAY\n"
+                           "    __vcom_original\n"
+                           "end\n")
+        command(f"source {delayed}; printf configured > {tmp}/delayed", "delayed")
+        text(f"printf accepted > {tmp}/pending-original")
+        xdo("key", "Return", "ctrl+a")
+        text(f"printf newer > {tmp}/newer-draft")
+        harness.wait_for(lambda: read("pending-original"), "delayed acceptance")
+        harness.wait_for(lambda: "ready" in state(), "ready after delayed acceptance")
+        # An acknowledgement must not clear a draft edited while it was pending.
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("newer-draft") == "newer", "concurrent draft retention")
+        harness.wait_for(lambda: "ready" in state(), "ready after retained draft")
+        text(f"printf retry > {tmp}/cancelled")
+        xdo("key", "Return", "Escape")
+        time.sleep(0.8)
+        assert not (tmp / "cancelled").exists(), "cancelled request executed"
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("cancelled") == "retry", "cancelled draft retry")
+        harness.wait_for(lambda: "ready" in state(), "ready after cancellation retry")
+        command(f"set --global VCOM_TEST_DELAY 3.3; printf configured > {tmp}/slow", "slow")
+        text(f"printf retry > {tmp}/expired")
+        xdo("key", "Return")
+        harness.wait_for(lambda: "pending" in state(), "pending slow submission")
+        harness.wait_for(lambda: "ready" in state(), "submission timeout")
+        time.sleep(0.5)
+        assert not (tmp / "expired").exists(), "expired request executed"
+        # Recover through the native editor; the expired Composer draft survives.
+        xdo("key", "ctrl+shift+m")
+        text("set --global VCOM_TEST_DELAY 0.05")
+        xdo("key", "Return")
+        time.sleep(0.1)
+        xdo("key", "ctrl+shift+m", "Return")
+        harness.wait_for(lambda: read("expired") == "retry", "expired draft retry")
+        subprocess.run([binary, "--session", "composer", "--quit"], env=env, check=True, timeout=4)
+        app.wait(timeout=5)
+        logs.flush()
+        data = (tmp / "frontend.log").read_text(errors="replace")
+        assert "CRITICAL" not in data and "ERROR **" not in data, data
+        print("PASS: Composer fish input, exact Unicode/newline argv, status, multiline, recall, native-buffer guard, foreground stdin/interrupt, nested fish, cwd, concurrent drafts, cancellation and timeout")
+    except Exception as error:
+        if visible():
+            subprocess.run(["import", "-display", env["DISPLAY"], "-window", visible().splitlines()[0],
+                            "/tmp/vcom-fish-failure.png"], timeout=4, check=False)
+        raise AssertionError(f"{error}; shell state {state()}") from error
+    finally:
+        if app.poll() is None:
+            subprocess.run([binary, "--session", "composer", "--quit"], env=env, timeout=4,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            app.wait(timeout=5)
+        logs.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit("Run python3 tests/integration.py --frontend")

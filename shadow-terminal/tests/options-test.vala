@@ -33,5 +33,19 @@ int main (string[] args) {
             assert (!r.explicit_command);
         } catch (Error e) { Test.fail (); }
     });
+    Test.add_func ("/options/composer-shell-selection", () => {
+        try {
+            var fish = Shadow.Request.parse ({"shadow-term", "--", "fish", "--login"});
+            assert (fish.composer_enabled ());
+            var classic = Shadow.Request.parse ({"shadow-term", "--input", "terminal", "--", "fish"});
+            assert (!classic.composer_enabled ());
+            var command = Shadow.Request.parse ({"shadow-term", "--", "fish", "-c", "echo hi"});
+            assert (!command.composer_enabled ());
+            try {
+                Shadow.Request.parse ({"shadow-term", "--input", "composer", "--", "sh"});
+                Test.fail ();
+            } catch (Error error) {}
+        } catch (Error error) { Test.fail (); }
+    });
     return Test.run ();
 }
