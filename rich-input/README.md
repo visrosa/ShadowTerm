@@ -1,6 +1,8 @@
-# Rich Input
+# V Composer
 
-A GTK4/Vala input prototype with editable Markdown presentation, basic fish highlighting, and a VTE shadow of ClaudeVassal's terminal. The editor's tagged `Gtk.TextBuffer` retains Markdown source even when delimiters are hidden. Switching modes changes presentation only.
+V Composer is a reusable GTK4/Vala text-input component intended as an alternative to readline-style editing, with editable Markdown presentation and basic fish highlighting. `src/editor.vala` owns the generic editor; `src/application.vala` is a demonstration host with an optional ClaudeVassal adapter and terminal shadow. The editor's tagged `Gtk.TextBuffer` retains Markdown source even when delimiters are hidden. Switching modes changes presentation only.
+
+[Shadow Term](../shadow-terminal/README.md), the working implementation name for the general Pane role, currently embeds the editor with an explicit paste action. Future routing is tentative: Composer may supply text through Pane, or components may communicate directly with their counterpart or the shell. Substituting Composer for a shell's line editor requires editing/session integration appropriate to that design. Independently of routing, Composer and Pane are an interaction layer over ordinary command and output streams; styling preserves those underlying streams. The executable and source paths below retain their existing names.
 
 ## Build and run
 

@@ -74,7 +74,7 @@ def main():
                                       text=True, check=check, timeout=4)
 
             def find_window():
-                proc = xdo("search", "--onlyvisible", "--name", "^Rich Input$", check=False)
+                proc = xdo("search", "--onlyvisible", "--name", "^V Composer$", check=False)
                 return proc.stdout.strip().splitlines()[:1]
 
             window = wait_for(find_window, "composer window")[0]

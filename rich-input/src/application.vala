@@ -23,7 +23,7 @@ public class Composer : Gtk.Application {
         Granite.init ();
         var settings = Granite.Settings.get_default ();
         var window = new Gtk.ApplicationWindow (this) {
-            title = _("Rich Input"), default_width = 920, default_height = 740
+            title = _("V Composer"), default_width = 920, default_height = 740
         };
         var header = new Gtk.HeaderBar ();
         var source_toggle = new Gtk.ToggleButton.with_label (_("Show Source"));
