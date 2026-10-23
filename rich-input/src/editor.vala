@@ -16,13 +16,16 @@ public class RichInput : Gtk.TextView {
     public bool fish_mode { get; set; default = false; }
     public bool dark { get; set; default = false; }
     public bool reveal_active_line { get; set; default = true; }
+    public string working_directory { get; set; default = ""; }
     private bool restyling = false;
+    private Gtk.CssProvider font_css = new Gtk.CssProvider ();
 
     public RichInput () {
         wrap_mode = Gtk.WrapMode.WORD_CHAR;
         left_margin = right_margin = 18;
         top_margin = bottom_margin = 12;
         buffer.enable_undo = true;
+        get_style_context ().add_provider (font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
         buffer.create_tag ("bold", "weight", Pango.Weight.BOLD);
         buffer.create_tag ("italic", "style", Pango.Style.ITALIC);
         buffer.create_tag ("code", "family", "monospace");
@@ -46,6 +49,106 @@ public class RichInput : Gtk.TextView {
             buffer.tag_table.lookup ("string").foreground = dark ? "#8ff0a4" : "#25703c";
             buffer.tag_table.lookup ("variable").foreground = dark ? "#99c1f1" : "#1c5eaa";
         });
+        var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
+        keys.key_pressed.connect ((key, code, state) => {
+            if (!editable || (state & Gdk.ModifierType.CONTROL_MASK) == 0) return false;
+            if ((state & (Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) != 0) return false;
+            switch (Gdk.keyval_to_lower (key)) {
+            case Gdk.Key.b: return toggle_format ("**");
+            case Gdk.Key.i: return toggle_format ("*");
+            case Gdk.Key.grave: return toggle_format ("`");
+            }
+            return false;
+        });
+        add_controller (keys);
+    }
+
+    public void set_editor_font (string font) {
+        var description = Pango.FontDescription.from_string (font);
+        string family = description.get_family () ?? "Sans";
+        // Font families are data, not CSS: escape quotes and line breaks.
+        family = family.replace ("\\", "\\\\").replace ("\"", "\\\"").replace ("\n", " ").replace ("\r", " ");
+        double size = description.get_size () / (double) Pango.SCALE;
+        if (size <= 0) size = 12;
+        string style = description.get_style () == Pango.Style.ITALIC ? "italic" :
+            description.get_style () == Pango.Style.OBLIQUE ? "oblique" : "normal";
+        font_css.load_from_string ("textview { font-family: \"%s\"; font-size: %s%s; font-weight: %d; font-style: %s; }".printf (
+            family, size.to_string (), description.get_size_is_absolute () ? "px" : "pt", (int) description.get_weight (), style));
+    }
+
+    public Gtk.Box formatting_toolbar () {
+        var tools = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0);
+        tools.add_css_class ("linked");
+        var bold = new Gtk.Button.from_icon_name ("format-text-bold-symbolic") {tooltip_text = "Bold (Ctrl+B)", focus_on_click = false};
+        var italic = new Gtk.Button.from_icon_name ("format-text-italic-symbolic") {tooltip_text = "Italic (Ctrl+I)", focus_on_click = false};
+        var code = new Gtk.Button.with_label ("</>") {tooltip_text = "Inline Code (Ctrl+`)", focus_on_click = false};
+        bold.clicked.connect (() => { toggle_format ("**"); grab_focus (); });
+        italic.clicked.connect (() => { toggle_format ("*"); grab_focus (); });
+        code.clicked.connect (() => { toggle_format ("`"); grab_focus (); });
+        tools.append (bold); tools.append (italic); tools.append (code);
+        bind_property ("fish-mode", tools, "visible", BindingFlags.SYNC_CREATE | BindingFlags.INVERT_BOOLEAN);
+        return tools;
+    }
+
+    public bool toggle_format (string delimiter) {
+        if (!editable || fish_mode || (delimiter != "**" && delimiter != "*" && delimiter != "`")) return false;
+        Gtk.TextIter start, end;
+        buffer.get_selection_bounds (out start, out end);
+        int a = start.get_offset (), b = end.get_offset ();
+        string selected = buffer.get_text (start, end, true);
+        string text = source ();
+        int width = delimiter.char_count ();
+        bool wrapped_selection = selected.length >= delimiter.length * 2 &&
+            selected.has_prefix (delimiter) && selected.has_suffix (delimiter);
+        bool wrapped_outside = a >= width && b + width <= text.char_count () &&
+            text.substring (text.index_of_nth_char (a - width), delimiter.length) == delimiter &&
+            text.substring (text.index_of_nth_char (b), delimiter.length) == delimiter;
+        buffer.begin_user_action ();
+        if (wrapped_selection) {
+            selected = selected.substring (delimiter.length, selected.length - 2 * delimiter.length);
+            buffer.delete (ref start, ref end);
+            buffer.insert (ref start, selected, -1);
+            select_offsets (a, a + selected.char_count ());
+        } else if (wrapped_outside) {
+            buffer.get_iter_at_offset (out start, a - width);
+            buffer.get_iter_at_offset (out end, b + width);
+            buffer.delete (ref start, ref end);
+            buffer.insert (ref start, selected, -1);
+            select_offsets (a - width, b - width);
+        } else {
+            buffer.delete (ref start, ref end);
+            buffer.insert (ref start, delimiter + selected + delimiter, -1);
+            select_offsets (a + width, b + width);
+        }
+        buffer.end_user_action ();
+        return true;
+    }
+
+    private void select_offsets (int a, int b) {
+        Gtk.TextIter start, end;
+        buffer.get_iter_at_offset (out start, a);
+        buffer.get_iter_at_offset (out end, b);
+        buffer.select_range (end, start);
+    }
+
+    public bool find_text (string query, bool backwards = false, bool match_case = false) {
+        if (query == "") return false;
+        Gtk.TextIter cursor, bound, start, end;
+        buffer.get_selection_bounds (out cursor, out bound);
+        if (!backwards) cursor = bound;
+        Gtk.TextSearchFlags flags = match_case ? (Gtk.TextSearchFlags) 0 : Gtk.TextSearchFlags.CASE_INSENSITIVE;
+        bool found = backwards ? cursor.backward_search (query, flags, out start, out end, null) :
+            cursor.forward_search (query, flags, out start, out end, null);
+        if (!found) {
+            if (backwards) buffer.get_end_iter (out cursor); else buffer.get_start_iter (out cursor);
+            found = backwards ? cursor.backward_search (query, flags, out start, out end, null) :
+                cursor.forward_search (query, flags, out start, out end, null);
+        }
+        if (found) {
+            buffer.select_range (end, start);
+            scroll_to_iter (start, 0.1, false, 0, 0);
+        }
+        return found;
     }
 
     public string source () {

@@ -51,8 +51,14 @@ public class Composer : Gtk.Application {
             mnemonic_widget = editor, xalign = 0, margin_start = 18, margin_top = 12
         };
         var prompt = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+        var assistance = new ComposerAssist (editor);
+        header.pack_start (editor.formatting_toolbar ());
+        var suggest = new Gtk.Button.from_icon_name ("insert-text-symbolic") {tooltip_text = "Suggestions (Ctrl+Space)", focus_on_click = false};
+        suggest.clicked.connect (() => { editor.grab_focus (); assistance.request.begin (); });
+        header.pack_end (suggest);
         prompt.append (prompt_label);
         prompt.append (edit_scroll);
+        prompt.append (assistance.panel);
         var paned = new Gtk.Paned (Gtk.Orientation.VERTICAL) {
             start_child = shadow_scroll, end_child = prompt, position = 410,
             resize_start_child = true, resize_end_child = true, vexpand = true
@@ -82,6 +88,7 @@ public class Composer : Gtk.Application {
         window.child = root;
         var keys = new Gtk.EventControllerKey ();
         keys.key_pressed.connect ((key, code, modifiers) => {
+            if (assistance.handle_key (key, modifiers)) return true;
             if ((modifiers & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.q) {
                 window.close ();
                 return true;
