@@ -54,6 +54,23 @@ def worker(tmp):
         xdo("windowfocus", "--sync", wid)
         harness.wait_for(lambda: "ready" in state(), "fish readiness event")
         time.sleep(0.05)
+        command(f"fish_prompt > {tmp}/hidden-prompt; fish_right_prompt > {tmp}/hidden-right; printf checked > {tmp}/hidden-ready", "hidden-ready")
+        assert read("hidden-prompt") == "" and read("hidden-right") == ""
+        xdo("key", "ctrl+shift+m")
+        time.sleep(0.12)
+        text(f"false; fish_prompt > {tmp}/native-prompt; fish_right_prompt > {tmp}/native-right; printf checked > {tmp}/native-ready")
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("native-ready"), "native prompt restoration")
+        assert read("native-prompt") == "LEFT[1]\n> ", repr(read("native-prompt"))
+        assert read("native-right") == "RIGHT"
+        xdo("key", "ctrl+shift+m")
+        time.sleep(0.12)
+        xdo("key", "F1")
+        help_window = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Keyboard Shortcuts$", check=False), "shortcut discovery")
+        xdo("windowfocus", "--sync", help_window.splitlines()[0])
+        xdo("key", "Escape")
+        harness.wait_for(lambda: not xdo("search", "--onlyvisible", "--name", "^Keyboard Shortcuts$", check=False), "shortcut dismissal")
+        xdo("windowfocus", "--sync", wid)
         command(f"printf normal > {tmp}/normal", "normal")
         # Native fish syntax, redirection, pipelines and shell state survive.
         command(f"printf lower | string upper > {tmp}/pipeline", "pipeline")

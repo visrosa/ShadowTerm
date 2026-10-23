@@ -25,6 +25,7 @@ int main (string[] args) {
             Gdk.RGBA fg = {}, bg = {};
             fg.parse ("#ddeeff"); bg.parse ("#112233");
             foreground.rgba = fg; background.rgba = bg;
+            ((Gtk.Scale) grid.get_child_at (1, 8)).set_value (50);
             font.font_desc = Pango.FontDescription.from_string ("Monospace 16");
             editor.font_desc = Pango.FontDescription.from_string ("Sans Italic 14");
             opacity.set_value (70); lines.value = 17000;
@@ -37,6 +38,7 @@ int main (string[] args) {
             assert (loaded.terminal_font == "Monospace 16" && loaded.editor_font == "Sans Italic 14");
             assert (loaded.opacity == 0.7 && loaded.scrollback == 17000);
             assert (!loaded.inherit_style && !loaded.system_colors);
+            assert (loaded.header_opacity_boost == 0.5);
             assert (loaded.foreground == fg.to_string () && loaded.background == bg.to_string ());
             parent.destroy ();
             FileUtils.unlink (filename);

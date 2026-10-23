@@ -83,6 +83,7 @@ def worker(tmp):
     try:
         subprocess.run([str(ROOT / "build/editor-test")], env=env, check=True, timeout=5)
         subprocess.run([str(ROOT / "build/appearance-test")], env=env, check=True, timeout=5)
+        subprocess.run([str(ROOT / "build/presentation-test")], env=env, check=True, timeout=8)
         launch("--input", "terminal", "--cwd", str(tmp), "--size", "900x620")
         wait_for(lambda: window("default"), "initial terminal window")
         pid = wait_for(lambda: sessions().get("default", (None, 0))[1], "default shell PID")
@@ -155,6 +156,10 @@ with (root/'raw-input').open('ab',buffering=0) as out:
         xdo("key", "ctrl+shift+v")
         wait_for(lambda: len(capture.read_bytes()) > len(expected), "clipboard paste")
         assert capture.read_bytes() == expected * 2, (capture.read_bytes(), expected * 2)
+        xdo("key", "Page_Up", "Page_Down", "F1")
+        raw_keys = b"\x1b[5~\x1b[6~\x1bOP"
+        wait_for(lambda: len(capture.read_bytes()) >= len(expected) * 2 + len(raw_keys), "alternate-screen program keys")
+        assert capture.read_bytes() == expected * 2 + raw_keys
         # Repeating a launcher with identical argv must reuse the session.
         invoke(*argv)
         assert sessions()["raw"][1] == raw_pid
@@ -240,9 +245,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--frontend", action="store_true", help="test Composer's interactive fish adapter")
+    parser.add_argument("--presentation", action="store_true", help="only check layout and live rendering on a private display")
     args = parser.parse_args()
     if args.worker:
-        if args.frontend:
+        if os.environ.get("SHADOW_TERM_PRIVATE_TEST") != "1":
+            raise SystemExit("Workers must be launched by the private-display harness")
+        if args.presentation:
+            subprocess.run([str(ROOT / "build/presentation-test")], check=True, timeout=8)
+        elif args.frontend:
             import runpy
             runpy.run_path(str(Path(__file__).with_name("fish-frontend.py")))["worker"](args.worker)
         else:
@@ -252,7 +262,7 @@ def main():
     clean_env = os.environ.copy()
     clean_env.pop("DISPLAY", None)
     clean_env.pop("WAYLAND_DISPLAY", None)
-    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.3"
+    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.4"
     assert subprocess.run([str(BINARY), "--size", "3x4"], env=clean_env, capture_output=True).returncode == 2
     with tempfile.TemporaryDirectory(prefix="shadow-term-test-") as directory:
         tmp = Path(directory)
@@ -263,24 +273,30 @@ def main():
         (tmp / "config").mkdir()
         (tmp / "config/fish").mkdir()
         (tmp / "config/fish/config.fish").write_text(
-            "function fish_prompt; printf '> '; end\nfunction fish_greeting; end\n")
+            "function fish_prompt\n set -l previous_status $status\n printf 'LEFT[%s]\\n> ' $previous_status\nend\n"
+            "function fish_right_prompt; printf RIGHT; end\nfunction fish_greeting; end\n")
         read_fd, write_fd = os.pipe()
+        display_log = open(tmp / "display.log", "w+")
         server = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1200x900x24",
                                    "-nolisten", "tcp", "-noreset"], pass_fds=(write_fd,),
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdout=subprocess.DEVNULL, stderr=display_log)
         os.close(write_fd)
         try:
-            assert select.select([read_fd], [], [], 5)[0], "Xvfb did not start"
+            if not select.select([read_fd], [], [], 15)[0]:
+                display_log.seek(0)
+                raise AssertionError("Private Xvfb did not start: " + display_log.read())
             with os.fdopen(read_fd) as pipe:
                 display = ":" + pipe.readline().strip()
             env = os.environ | {"DISPLAY": display, "GDK_BACKEND": "x11", "GSK_RENDERER": "cairo",
                                 "LIBGL_ALWAYS_SOFTWARE": "1", "GTK_A11Y": "none", "GTK_USE_PORTAL": "0",
-                                "GIO_USE_VFS": "local", "XDG_CONFIG_HOME": str(tmp / "config"),
+                                "GIO_USE_VFS": "local", "SHADOW_TERM_PRIVATE_TEST": "1", "XDG_CONFIG_HOME": str(tmp / "config"),
                                 "XDG_STATE_HOME": str(tmp / "state"), "SHELL": "/usr/bin/fish"}
             arguments = ["dbus-run-session", "--config-file=" + str(config), "--", sys.executable,
                          str(Path(__file__).resolve()), "--worker", str(tmp)]
             if args.frontend:
                 arguments.append("--frontend")
+            if args.presentation:
+                arguments.append("--presentation")
             result = subprocess.run(arguments, env=env,
                                     capture_output=True, text=True, timeout=55)
             if result.returncode:
@@ -290,6 +306,7 @@ def main():
         finally:
             server.terminate()
             server.wait(timeout=3)
+            display_log.close()
 
 
 if __name__ == "__main__":

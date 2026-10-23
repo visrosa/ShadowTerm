@@ -8,6 +8,7 @@ namespace Shadow {
         public bool system_colors = true;
         public string foreground = "#eeeeec";
         public string background = "#20242b";
+        public double header_opacity_boost = 0;
         public signal void changed ();
         private string filename;
 
@@ -26,6 +27,10 @@ namespace Shadow {
             try { system_colors = file.get_boolean ("appearance", "system-colors"); } catch (Error error) {}
             try { foreground = valid_color (file.get_string ("appearance", "foreground"), foreground); } catch (Error error) {}
             try { background = valid_color (file.get_string ("appearance", "background"), background); } catch (Error error) {}
+            try {
+                double value = file.get_double ("appearance", "header-opacity-boost");
+                if (value.is_finite ()) header_opacity_boost = double.max (0, double.min (1, value));
+            } catch (Error error) {}
         }
 
         private static string valid_color (string value, string fallback) {
@@ -48,6 +53,12 @@ namespace Shadow {
             return color;
         }
 
+        public Gdk.RGBA header_background (bool dark) {
+            var color = pane_background (dark);
+            color.alpha = (float) (opacity + (1 - opacity) * header_opacity_boost);
+            return color;
+        }
+
         private static string valid_font (string value, string fallback) {
             if (value == "" || value.length > 512 || value.contains ("\n") || value.contains ("\r")) return fallback;
             var font = Pango.FontDescription.from_string (value);
@@ -58,7 +69,7 @@ namespace Shadow {
 
         public void apply (string terminal, string editor, double opacity, int64 scrollback,
                            bool inherit_style = true, bool system_colors = true,
-                           string foreground = "#eeeeec", string background = "#20242b") throws Error {
+                           string foreground = "#eeeeec", string background = "#20242b", double header_opacity_boost = 0) throws Error {
             terminal_font = valid_font (terminal, terminal_font);
             editor_font = valid_font (editor, editor_font);
             this.opacity = opacity.is_finite () ? double.max (0, double.min (1, opacity)) : 1;
@@ -67,6 +78,7 @@ namespace Shadow {
             this.system_colors = system_colors;
             this.foreground = valid_color (foreground, this.foreground);
             this.background = valid_color (background, this.background);
+            this.header_opacity_boost = header_opacity_boost.is_finite () ? double.max (0, double.min (1, header_opacity_boost)) : 0;
             changed ();
             var file = new KeyFile ();
             file.set_string ("appearance", "terminal-font", terminal_font);
@@ -77,6 +89,7 @@ namespace Shadow {
             file.set_boolean ("appearance", "system-colors", system_colors);
             file.set_string ("appearance", "foreground", this.foreground);
             file.set_string ("appearance", "background", this.background);
+            file.set_double ("appearance", "header-opacity-boost", this.header_opacity_boost);
             if (DirUtils.create_with_parents (Path.get_dirname (filename), 0700) != 0)
                 throw new IOError.FAILED ("Could not create the preferences directory");
             FileUtils.set_contents (filename, file.to_data ());
@@ -93,6 +106,7 @@ namespace Shadow {
         private Gtk.Switch system_colors;
         private Gtk.ColorDialogButton foreground;
         private Gtk.ColorDialogButton background;
+        private Gtk.Scale header_boost;
         private Gtk.Label status;
         private bool updating = false;
         private uint save_timeout = 0;
@@ -121,19 +135,22 @@ namespace Shadow {
                 rgba = fg, halign = Gtk.Align.START, sensitive = !settings.system_colors};
             background = new Gtk.ColorDialogButton (new Gtk.ColorDialog () {title = "Pane Background Color", with_alpha = false}) {
                 rgba = bg, halign = Gtk.Align.START, sensitive = !settings.system_colors};
+            header_boost = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, 100, 1) {
+                draw_value = true, digits = 0, hexpand = true, tooltip_text = "0% matches Pane opacity; 100% keeps the header opaque"};
+            header_boost.set_value (settings.header_opacity_boost * 100);
             status = new Gtk.Label ("") {xalign = 0, wrap = true};
-            Gtk.Widget[] controls = {terminal, editor, opacity, lines, inherit_style, system_colors, foreground, background};
+            Gtk.Widget[] controls = {terminal, editor, opacity, lines, inherit_style, system_colors, foreground, background, header_boost};
             string[] labels = {"Terminal font", "Composer font", "Background opacity (%)", "Scrollback lines",
-                "Inherit Pane Style", "Use system colors", "Pane text", "Pane background"};
+                "Inherit Pane Style", "Use system colors", "Pane text", "Pane background", "Header opacity boost (%)"};
             for (int i = 0; i < labels.length; i++) {
                 var label = new Gtk.Label (labels[i]) {xalign = 0};
                 label.set_mnemonic_widget (controls[i]);
                 grid.attach (label, 0, i); grid.attach (controls[i], 1, i);
             }
-            grid.attach (new Gtk.Label ("Transparency depends on compositor support.") {xalign = 0, wrap = true}, 0, 8, 2);
-            grid.attach (status, 0, 9, 2);
+            grid.attach (new Gtk.Label ("Transparency depends on compositor support.") {xalign = 0, wrap = true}, 0, 9, 2);
+            grid.attach (status, 0, 10, 2);
             var reset = new Gtk.Button.with_label ("Restore Defaults") {halign = Gtk.Align.START};
-            grid.attach (reset, 0, 10, 2);
+            grid.attach (reset, 0, 11, 2);
             set_child (grid);
             terminal.notify["font-desc"].connect (schedule_apply);
             editor.notify["font-desc"].connect (schedule_apply);
@@ -146,6 +163,7 @@ namespace Shadow {
             });
             foreground.notify["rgba"].connect (schedule_apply);
             background.notify["rgba"].connect (schedule_apply);
+            header_boost.value_changed.connect (schedule_apply);
             reset.clicked.connect (() => {
                 updating = true;
                 terminal.font_desc = Pango.FontDescription.from_string ("Monospace 12");
@@ -155,6 +173,7 @@ namespace Shadow {
                 Gdk.RGBA reset_fg = {}, reset_bg = {};
                 reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b");
                 foreground.rgba = reset_fg; background.rgba = reset_bg;
+                header_boost.set_value (0);
                 updating = false;
                 schedule_apply ();
             });
@@ -188,7 +207,7 @@ namespace Shadow {
             try {
                 settings.apply (terminal.font_desc.to_string (), editor.font_desc.to_string (), opacity.get_value () / 100,
                     (int64) lines.value, inherit_style.active, system_colors.active,
-                    foreground.get_rgba ().to_string (), background.get_rgba ().to_string ());
+                    foreground.get_rgba ().to_string (), background.get_rgba ().to_string (), header_boost.get_value () / 100);
                 status.label = "";
             } catch (Error error) { status.label = "Applied for this session; could not save: " + error.message; }
         }

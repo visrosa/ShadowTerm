@@ -1,4 +1,5 @@
 namespace Shadow {
+    private delegate void MenuAction ();
     [CCode (cname = "shadow_position", cheader_filename = "placement.h")]
     extern bool position (Gtk.Window window, int x, int y, bool restore);
     [CCode (cname = "shadow_get_position", cheader_filename = "placement.h")]
@@ -44,6 +45,15 @@ namespace Shadow {
         private Gtk.Label search_status;
         private Gtk.Window? preferences_window;
         private ulong preferences_handler;
+        private bool presentation_dirty = false;
+        private Gtk.Box feedback_bar;
+        private Gtk.Box compose_box;
+        private Gtk.Label directory_label;
+        private Gtk.Label repository_label;
+        private RepositoryContext repository = new RepositoryContext ();
+        private Gtk.Window? shortcuts_window;
+        private Granite.Settings desktop_settings;
+        private ulong theme_handler;
         public signal void ended ();
 
         public TerminalWindow (Host owner, Request config, string[] environment) {
@@ -77,89 +87,28 @@ namespace Shadow {
             terminal.set_scroll_on_output (false);
             var scroll = new Gtk.ScrolledWindow () {child = terminal, vexpand = true};
             editor = new RichInput ();
+            editor.add_css_class ("composer-input");
             editor.fish_mode = shell_editor;
             editor.working_directory = shell_cwd;
             assistance = new ComposerAssist (editor);
-            var settings = Granite.Settings.get_default ();
-            settings.notify["prefers-color-scheme"].connect (update_colors);
-            update_colors ();
+            desktop_settings = Granite.Settings.get_default ();
+            theme_handler = desktop_settings.notify["prefers-color-scheme"].connect (update_colors);
 
-            var header = new Gtk.HeaderBar ();
-            var new_button = new Gtk.Button.from_icon_name ("tab-new-symbolic") {tooltip_text = "New Terminal (Ctrl+Shift+N)"};
-            new_button.clicked.connect (() => host.new_terminal (shell_cwd));
-            header.pack_start (new_button);
-            var find_button = new Gtk.Button.from_icon_name ("edit-find-symbolic") {tooltip_text = "Find in Terminal (Ctrl+Shift+F)"};
-            find_button.clicked.connect (() => open_search (false));
-            header.pack_start (find_button);
-            var preferences_button = new Gtk.Button.from_icon_name ("preferences-system-symbolic") {tooltip_text = "Preferences (Ctrl+,)"};
-            preferences_button.clicked.connect (show_preferences);
-            header.pack_end (preferences_button);
-            var hide_button = new Gtk.Button.from_icon_name ("window-minimize-symbolic") {tooltip_text = "Hide Session (Ctrl+Shift+H)"};
-            hide_button.clicked.connect (hide_session);
-            header.pack_end (hide_button);
-            compose_button = new Gtk.ToggleButton.with_label ("V Composer") {tooltip_text = "Show input editor (Ctrl+Shift+M)", active = shell_editor};
-            header.pack_end (compose_button);
-            set_titlebar (header);
-
-            var tools = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8) {
-                margin_start = 12, margin_end = 12, margin_top = 8, margin_bottom = 8
-            };
-            mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
-            mode.selected = shell_editor ? 1 : 0;
-            mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
-            var source = new Gtk.ToggleButton.with_label ("Show Source");
-            source.bind_property ("active", editor, "source-mode", BindingFlags.SYNC_CREATE);
-            var paste = new Gtk.Button.from_icon_name ("edit-paste-symbolic") {
-                tooltip_text = "Paste into Terminal (Ctrl+Shift+Enter)", hexpand = true, halign = Gtk.Align.END};
-            paste.clicked.connect (() => {
-                paste_draft ();
-            });
-            recall_button = new Gtk.Button.with_label ("Recall Last") {sensitive = false};
-            recall_button.clicked.connect (() => {
-                if (editor.source () == "") editor.buffer.text = last_source;
-                editor.grab_focus ();
-            });
-            submit_button = new Gtk.Button.with_label ("Run") {visible = shell_editor, sensitive = false};
-            submit_button.add_css_class ("suggested-action");
-            submit_button.clicked.connect (() => submit_command (false));
-            cancel_button = new Gtk.Button.with_label ("Cancel") {visible = false};
-            cancel_button.clicked.connect (() => input_session.reject ("Submission cancelled; draft retained"));
-            var suggest = new Gtk.Button.from_icon_name ("insert-text-symbolic") {tooltip_text = "Suggestions (Ctrl+Space)", focus_on_click = false};
-            suggest.clicked.connect (() => { editor.grab_focus (); assistance.request.begin (); });
-            tools.append (mode); tools.append (source); tools.append (editor.formatting_toolbar ());
-            tools.append (suggest); tools.append (recall_button);
-            tools.append (paste); tools.append (cancel_button); tools.append (submit_button);
-            var compose_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
-            compose_box.add_css_class ("shadow-chrome");
-            compose_box.append (tools);
-            compose_box.append (new Gtk.ScrolledWindow () {child = editor, min_content_height = 140});
-            compose_box.append (assistance.panel);
-            composer = new Gtk.Revealer () {child = compose_box, transition_duration = 0};
-            compose_button.bind_property ("active", composer, "reveal-child", BindingFlags.SYNC_CREATE);
-            compose_button.toggled.connect (() => {
-                if (compose_button.active) editor.grab_focus (); else terminal.grab_focus ();
-            });
-
-            feedback = new Gtk.Label ("Starting…") {hexpand = true, xalign = 0, ellipsize = Pango.EllipsizeMode.MIDDLE};
+            set_titlebar (create_header ());
+            var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            root.add_css_class ("shadow-pane");
+            root.append (create_search ());
+            scroll.add_css_class ("terminal-scroll");
+            root.append (scroll);
+            root.append (create_composer ());
+            feedback = new Gtk.Label ("Starting…") {hexpand = true, xalign = 0, wrap = true};
             restart = new Gtk.Button.with_label ("Restart") {visible = false};
             restart.clicked.connect (() => { terminal.reset (true, true); start (); });
-            var footer = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8) {
-                margin_start = 0, margin_end = 0, margin_top = 0, margin_bottom = 0
-            };
-            footer.add_css_class ("shadow-chrome");
-            footer.add_css_class ("shadow-padding");
-            footer.append (feedback); footer.append (restart);
-            var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
-            root.append (create_search ());
-            preview = new RichInput () {editable = false, cursor_visible = false, reveal_active_line = false};
-            var preview_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
-            preview_box.add_css_class ("shadow-chrome");
-            preview_box.append (new Gtk.Label ("Last input") {xalign = 0, margin_start = 12, margin_top = 6});
-            preview_box.append (new Gtk.ScrolledWindow () {child = preview, max_content_height = 110,
-                propagate_natural_height = true});
-            preview_card = new Gtk.Revealer () {child = preview_box, transition_duration = 0};
-            root.append (preview_card);
-            root.append (scroll); root.append (composer); root.append (footer);
+            feedback_bar = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            feedback_bar.add_css_class ("shadow-chrome");
+            feedback_bar.add_css_class ("shadow-padding");
+            feedback_bar.append (feedback); feedback_bar.append (restart);
+            root.append (feedback_bar);
             set_child (root);
             apply_preferences ();
             preferences_handler = host.preferences.changed.connect (apply_preferences);
@@ -167,6 +116,7 @@ namespace Shadow {
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
                 if (editor.has_focus && assistance.handle_key (key, state)) return true;
+                if (key == Gdk.Key.F1 && editor.has_focus) { show_shortcuts (); return true; }
                 if ((state & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.comma) {
                     show_preferences (); return true;
                 }
@@ -254,6 +204,7 @@ namespace Shadow {
                         "signal %d".printf ((int) Process.term_sig (status));
                     feedback.label = "Process ended (%s) · %s".printf (result, request.session);
                     restart.visible = true;
+                    feedback_bar.visible = true;
                 }
             });
             editor.buffer.changed.connect (refresh_input);
@@ -261,7 +212,7 @@ namespace Shadow {
             input_session.accepted.connect ((source_text) => {
                 last_source = source_text;
                 preview.fish_mode = editor.fish_mode;
-                preview.dark = editor.dark;
+                preview.dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
                 preview.buffer.text = source_text;
                 preview_card.reveal_child = true;
                 if (editor.source () == source_text) editor.buffer.text = "";
@@ -269,28 +220,204 @@ namespace Shadow {
             });
             input_session.rejected.connect ((reason) => {
                 feedback.label = reason;
+                feedback_bar.visible = true;
                 if (enter_submission && reason.has_prefix ("Incomplete") && editor.source () == submitted_source)
                     editor.buffer.insert_at_cursor ("\n", -1);
                 if (is_active && composer.reveal_child) editor.grab_focus ();
             });
         }
 
+        private Gtk.Button menu_item (Gtk.Box box, Gtk.Popover popover, string label, string shortcut, owned MenuAction action) {
+            var button = new Gtk.Button () {has_frame = false};
+            var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 24);
+            row.append (new Gtk.Label (label) {hexpand = true, xalign = 0});
+            var hint = new Gtk.Label (shortcut) {xalign = 1};
+            hint.add_css_class ("dim-label");
+            row.append (hint);
+            button.child = row;
+            button.clicked.connect (() => { popover.popdown (); action (); });
+            box.append (button);
+            return button;
+        }
+
+        private Gtk.HeaderBar create_header () {
+            var header = new Gtk.HeaderBar ();
+            header.add_css_class ("shadow-header");
+            var new_button = new Gtk.Button.from_icon_name ("tab-new-symbolic") {tooltip_text = "New Terminal (Ctrl+Shift+N)"};
+            new_button.add_css_class ("header-action");
+            new_button.clicked.connect (() => host.new_terminal (shell_cwd));
+            header.pack_start (new_button);
+            var title_label = new Gtk.Label (request.title) {ellipsize = Pango.EllipsizeMode.MIDDLE, max_width_chars = 36};
+            bind_property ("title", title_label, "label", BindingFlags.SYNC_CREATE);
+            header.title_widget = title_label;
+            var menu = new Gtk.MenuButton () {icon_name = "open-menu-symbolic", tooltip_text = "Terminal Options"};
+            menu.add_css_class ("header-action");
+            var popover = new Gtk.Popover ();
+            popover.add_css_class ("shadow-chrome");
+            var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 2) {margin_start = 6, margin_end = 6, margin_top = 6, margin_bottom = 6};
+            menu_item (box, popover, "Find in Terminal", "Ctrl+Shift+F", () => open_search (false));
+            compose_button = new Gtk.ToggleButton.with_label ("V Composer") {active = shell_editor,
+                tooltip_text = "Show Composer or use native terminal input (Ctrl+Shift+M)", has_frame = false};
+            box.append (compose_button);
+            compose_button.toggled.connect (() => popover.popdown ());
+            box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
+            menu_item (box, popover, "Preferences…", "Ctrl+,", show_preferences);
+            menu_item (box, popover, "Keyboard Shortcuts", "F1", show_shortcuts);
+            box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
+            menu_item (box, popover, "Hide Session", "Ctrl+Shift+H", hide_session);
+            menu_item (box, popover, "Close Session", "Ctrl+Shift+W", end_session);
+            popover.child = box; menu.popover = popover;
+            header.pack_end (menu);
+            return header;
+        }
+
+        private static string compact_directory (string directory) {
+            string home = Environment.get_home_dir ();
+            if (directory == home) return "~";
+            if (directory.has_prefix (home + "/")) return "~" + directory.substring (home.length);
+            return directory;
+        }
+
+        private Gtk.Revealer create_composer () {
+            compose_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            compose_box.add_css_class ("shadow-composer");
+            var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0);
+            var prompt = new Gtk.Image.from_icon_name ("go-next-symbolic") {margin_start = 14, margin_end = 0};
+            prompt.add_css_class ("dim-label");
+            row.append (prompt);
+            editor.left_margin = 10;
+            editor.right_margin = 10;
+            var editor_overlay = new Gtk.Overlay ();
+            editor_overlay.child = editor;
+            var placeholder = new Gtk.Label (shell_editor ? "Type a command…" : "Write something…") {
+                xalign = 0, valign = Gtk.Align.START, margin_start = 10, margin_top = 12, can_target = false};
+            placeholder.add_css_class ("dim-label");
+            editor_overlay.add_overlay (placeholder);
+            editor.buffer.changed.connect (() => { placeholder.visible = editor.buffer.get_char_count () == 0; });
+            row.append (new Gtk.ScrolledWindow () {child = editor_overlay, hexpand = true,
+                min_content_height = 48, max_content_height = 190, propagate_natural_height = true});
+            cancel_button = new Gtk.Button.from_icon_name ("process-stop-symbolic") {
+                visible = false, tooltip_text = "Cancel Submission (Escape)", valign = Gtk.Align.CENTER, has_frame = false};
+            cancel_button.clicked.connect (() => input_session.reject ("Submission cancelled; draft retained"));
+            submit_button = new Gtk.Button.from_icon_name ("go-up-symbolic") {
+                visible = false, sensitive = false, tooltip_text = "Run Command (Enter; Shift+Enter adds a line)", valign = Gtk.Align.CENTER};
+            submit_button.add_css_class ("suggested-action");
+            submit_button.add_css_class ("circular");
+            submit_button.clicked.connect (() => submit_command (false));
+            var options = new Gtk.MenuButton () {icon_name = "view-more-symbolic", tooltip_text = "Composer Options",
+                valign = Gtk.Align.CENTER, margin_start = 4, margin_end = 10, has_frame = false};
+            var popover = new Gtk.Popover ();
+            popover.add_css_class ("shadow-chrome");
+            var tools = new Gtk.Box (Gtk.Orientation.VERTICAL, 8) {margin_start = 12, margin_end = 12, margin_top = 12, margin_bottom = 12};
+            var style_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            style_row.append (new Gtk.Label ("Presentation") {hexpand = true, xalign = 0});
+            mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
+            mode.selected = shell_editor ? 1 : 0;
+            mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
+            style_row.append (mode); tools.append (style_row);
+            var source = new Gtk.CheckButton.with_label ("Show Markdown Source");
+            source.bind_property ("active", editor, "source-mode", BindingFlags.SYNC_CREATE);
+            tools.append (source);
+            editor.bind_property ("fish-mode", source, "visible", BindingFlags.SYNC_CREATE | BindingFlags.INVERT_BOOLEAN);
+            tools.append (editor.formatting_toolbar ());
+            menu_item (tools, popover, "Suggestions", "Ctrl+Space", () => { editor.grab_focus (); assistance.request.begin (); });
+            recall_button = menu_item (tools, popover, "Recall Last Input", "Ctrl+Shift+L", () => {
+                if (editor.source () == "") editor.buffer.text = last_source;
+                editor.grab_focus ();
+            });
+            recall_button.sensitive = false;
+            menu_item (tools, popover, "Find in Composer", "Ctrl+F", () => open_search (true));
+            menu_item (tools, popover, "Paste into Terminal", "Ctrl+Shift+Enter", paste_draft);
+            menu_item (tools, popover, "Refresh Repository", "", () => repository.refresh.begin (shell_cwd));
+            preview = new RichInput () {editable = false, cursor_visible = false, reveal_active_line = false};
+            var last_input = new Gtk.Expander ("Last Input") {child = new Gtk.ScrolledWindow () {
+                child = preview, max_content_height = 140, max_content_width = 480, propagate_natural_height = true}};
+            preview_card = new Gtk.Revealer () {child = last_input, transition_duration = 0};
+            tools.append (preview_card);
+            popover.child = tools; options.popover = popover;
+            row.append (cancel_button); row.append (submit_button); row.append (options);
+            compose_box.append (row);
+            compose_box.append (assistance.panel);
+            var context = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12) {margin_start = 42, margin_end = 14, margin_bottom = 10};
+            context.add_css_class ("composer-context");
+            directory_label = new Gtk.Label (compact_directory (shell_cwd)) {
+                xalign = 0, hexpand = true, ellipsize = Pango.EllipsizeMode.MIDDLE, tooltip_text = shell_cwd};
+            directory_label.add_css_class ("dim-label");
+            repository_label = new Gtk.Label ("") {ellipsize = Pango.EllipsizeMode.MIDDLE, max_width_chars = 36, visible = false};
+            repository_label.add_css_class ("dim-label");
+            repository.notify["summary"].connect (() => {
+                repository_label.label = repository.summary;
+                repository_label.visible = repository.summary != "";
+            });
+            repository.notify["detail"].connect (() => { repository_label.tooltip_text = repository.detail; });
+            context.append (directory_label); context.append (repository_label);
+            compose_box.append (context);
+            composer = new Gtk.Revealer () {child = compose_box, transition_duration = 0};
+            compose_button.bind_property ("active", composer, "reveal-child", BindingFlags.SYNC_CREATE);
+            compose_button.toggled.connect (() => {
+                presentation_dirty = true;
+                sync_presentation ();
+                if (compose_button.active) editor.grab_focus (); else terminal.grab_focus ();
+            });
+            return composer;
+        }
+
+        private void show_shortcuts () {
+            if (shortcuts_window == null) {
+                shortcuts_window = new Gtk.Window () {title = "Keyboard Shortcuts", transient_for = this, application = host,
+                    modal = true, destroy_with_parent = true, resizable = false};
+                shortcuts_window.titlebar = new Gtk.HeaderBar ();
+                var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {margin_start = 24, margin_end = 24, margin_top = 18, margin_bottom = 24};
+                var grid = new Gtk.Grid () {column_spacing = 36, row_spacing = 10};
+                string[] actions = {"Run command / New line", "Run without adding a line", "Suggestions", "Composer / Native input",
+                    "Recall last input", "Find in Composer / Terminal", "Copy / Paste terminal text", "Paste Composer source into terminal",
+                    "New / Close session", "Hide session", "Preferences", "Bold / Italic / Code (Markdown)", "Zoom in / Out / Reset"};
+                string[] shortcuts = {"Enter / Shift+Enter", "Ctrl+Enter", "Ctrl+Space", "Ctrl+Shift+M", "Ctrl+Shift+L",
+                    "Ctrl+F / Ctrl+Shift+F", "Ctrl+Shift+C / V", "Ctrl+Shift+Enter", "Ctrl+Shift+N / W", "Ctrl+Shift+H",
+                    "Ctrl+,", "Ctrl+B / I / `", "Ctrl+Shift+Plus / Minus / 0"};
+                for (int i = 0; i < actions.length; i++) {
+                    grid.attach (new Gtk.Label (actions[i]) {xalign = 0}, 0, i);
+                    grid.attach (new Gtk.Label (shortcuts[i]) {xalign = 1}, 1, i);
+                }
+                box.append (grid);
+                box.append (new Gtk.Label ("Foreground programs receive terminal input.\nSuggestions edit the draft; accepting one never runs it.") {xalign = 0});
+                shortcuts_window.child = box;
+                var keys = new Gtk.EventControllerKey ();
+                keys.key_pressed.connect ((key) => { if (key == Gdk.Key.Escape) { shortcuts_window.close (); return true; } return false; });
+                ((Gtk.Widget) shortcuts_window).add_controller (keys);
+                shortcuts_window.close_request.connect (() => { shortcuts_window = null; return false; });
+            }
+            shortcuts_window.present ();
+        }
+
         private void refresh_input () {
             submit_button.sensitive = shell_editor && running && input_session.ready && !input_session.pending && editor.source () != "";
+            submit_button.visible = shell_editor && editor.source () != "" && !input_session.pending;
             cancel_button.visible = input_session.pending;
             recall_button.sensitive = last_source != "" && editor.source () == "";
             bool became_ready = input_session.ready && !previous_ready;
             bool became_busy = !input_session.ready && previous_ready;
             previous_ready = input_session.ready;
+            sync_presentation ();
             if (shell_editor) {
+                if (running) feedback_bar.visible = input_session.pending;
                 if (input_session.pending) feedback.label = "Waiting for fish to accept input…";
-                else if (input_session.ready) feedback.label = "fish ready · Enter runs · Shift+Enter adds a line · " + shell_cwd;
-                else if (running) feedback.label = "Program input uses the terminal · draft remains editable";
                 if (is_active) {
                     if (became_ready && composer.reveal_child) editor.grab_focus ();
                     else if (became_busy) terminal.grab_focus ();
                 }
             }
+        }
+
+        public bool composer_active () {
+            return shell_editor && compose_button.active;
+        }
+
+        private void sync_presentation () {
+            // Never send a prompt-control binding to a foreground program.
+            if (!presentation_dirty || !shell_editor || !input_session.ready || input_session.pending) return;
+            presentation_dirty = false;
+            terminal.feed_child ("\x1b\x10".data);
         }
 
         private void submit_command (bool from_enter) {
@@ -302,12 +429,15 @@ namespace Shadow {
                 // fish's binding retrieves source over the bridge. No source,
                 // markup, quoting or terminal paste conversion occurs here.
                 terminal.feed_child ("\x1b\x0f".data);
-            } catch (IOError error) { feedback.label = error.message; }
+            } catch (IOError error) { feedback.label = error.message; feedback_bar.visible = true; }
         }
 
         public void shell_directory (string directory) {
             shell_cwd = directory;
             editor.working_directory = directory;
+            directory_label.label = compact_directory (directory);
+            directory_label.tooltip_text = directory;
+            repository.refresh.begin (directory);
             refresh_input ();
         }
 
@@ -403,11 +533,17 @@ namespace Shadow {
             bool dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
             editor.dark = dark;
             if (preview != null) preview.dark = dark;
-            Gdk.RGBA foreground = {}, background = {};
-            foreground.parse (dark ? "#f6f5f4" : "#242424");
-            background.parse (dark ? "#1e1e1e" : "#ffffff");
-            background.alpha = (float) host.preferences.opacity;
+            var background = host.preferences.pane_background (dark);
+            var foreground = host.preferences.pane_foreground (dark);
+            bool editor_dark = host.preferences.inherit_style ?
+                background.red * 0.2126 + background.green * 0.7152 + background.blue * 0.0722 < 0.5 : dark;
+            editor.dark = editor_dark;
+            if (preview != null) preview.dark = dark;
             terminal.set_colors (foreground, background, null);
+            if (compose_box != null) {
+                if (host.preferences.inherit_style) compose_box.add_css_class ("inherit-pane-style");
+                else compose_box.remove_css_class ("inherit-pane-style");
+            }
         }
 
         private void paste_draft () {
@@ -420,6 +556,8 @@ namespace Shadow {
             if (spawning || running || closing) return;
             spawning = true;
             restart.visible = false;
+            feedback.label = "Starting…";
+            feedback_bar.visible = true;
             spawn_cancel = new Cancellable ();
             input_session.reset ();
             // Remove parent-terminal identity so children discover this VTE,
@@ -445,12 +583,12 @@ namespace Shadow {
                     spawning = false;
                     if (error != null) {
                         if (closing) finish ();
-                        else { feedback.label = "Launch failed: " + error.message; restart.visible = true; }
+                        else { feedback.label = "Launch failed: " + error.message; restart.visible = true; feedback_bar.visible = true; }
                         return;
                     }
                     child_pid = pid; running = true;
                     if (closing) { stop_child (); return; }
-                    feedback.label = "%s · %s".printf (request.session, request.cwd);
+                    feedback_bar.visible = false;
                     refresh_input ();
                 });
         }
@@ -501,6 +639,7 @@ namespace Shadow {
             save_geometry ();
             closing = true;
             assistance.dismiss ();
+            repository.cancel ();
             input_session.reset ();
             visible = false;
             if (blur_idle != 0) { Source.remove (blur_idle); blur_idle = 0; }
@@ -510,6 +649,9 @@ namespace Shadow {
         }
 
         private void finish () {
+            repository.cancel ();
+            if (theme_handler != 0) { desktop_settings.disconnect (theme_handler); theme_handler = 0; }
+            if (shortcuts_window != null) { shortcuts_window.destroy (); shortcuts_window = null; }
             if (preferences_window != null) { preferences_window.destroy (); preferences_window = null; }
             if (preferences_handler != 0) { host.preferences.disconnect (preferences_handler); preferences_handler = 0; }
             if (blur_idle != 0) { Source.remove (blur_idle); blur_idle = 0; }
@@ -522,6 +664,7 @@ namespace Shadow {
         private HashTable<string, TerminalWindow> sessions = new HashTable<string, TerminalWindow> (str_hash, str_equal);
         private ShellBridge bridge;
         public Preferences preferences;
+        private Gtk.CssProvider appearance_css = new Gtk.CssProvider ();
 
         public Host () {
             Object (application_id: "io.github.visrosa.Vibrant.ShadowTerm",
@@ -532,14 +675,40 @@ namespace Shadow {
             base.startup ();
             Granite.init ();
             preferences = new Preferences ();
-            var css = new Gtk.CssProvider ();
-            css.load_from_string ("window.shadow-terminal { background-color: transparent; } .shadow-chrome { background-color: @theme_bg_color; } .shadow-padding { padding: 6px 12px; }");
-            Gtk.StyleContext.add_provider_for_display (Gdk.Display.get_default (), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            Gtk.StyleContext.add_provider_for_display (Gdk.Display.get_default (), appearance_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            update_style ();
+            preferences.changed.connect (update_style);
+            Granite.Settings.get_default ().notify["prefers-color-scheme"].connect (update_style);
             bridge = new ShellBridge (this);
             try { get_dbus_connection ().register_object<ShellBridge> ("/io/github/visrosa/Vibrant/Shell", bridge); }
             catch (IOError error) { warning ("Shell integration unavailable: %s", error.message); }
             Unix.signal_add (Posix.Signal.TERM, () => { end_all (); return Source.CONTINUE; });
             Unix.signal_add (Posix.Signal.INT, () => { end_all (); return Source.CONTINUE; });
+        }
+
+        private void update_style () {
+            bool dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+            string foreground = preferences.pane_foreground (dark).to_string ();
+            string background = preferences.pane_background (dark).to_string ();
+            string header_background = preferences.header_background (dark).to_string ();
+            appearance_css.load_from_string ("""
+                window.shadow-terminal { background-color: transparent; }
+                vte-terminal { padding: 10px 14px; }
+                .shadow-chrome { background-color: @theme_bg_color; color: @theme_fg_color; }
+                .shadow-padding { padding: 8px 14px; }
+                headerbar.shadow-header { background-image: none; background-color: %s; color: %s;
+                    box-shadow: none; border-bottom: 1px solid alpha(%s, 0.12); }
+                headerbar.shadow-header button.header-action,
+                headerbar.shadow-header .header-action > button,
+                headerbar.shadow-header windowcontrols button { color: %s; }
+                .shadow-composer { background-color: @theme_bg_color; color: @theme_fg_color;
+                    border-top: 1px solid alpha(@theme_fg_color, 0.12); }
+                .shadow-composer textview, .shadow-composer textview text { background-color: transparent; }
+                .composer-context { font-size: 0.85em; }
+                .shadow-composer.inherit-pane-style { background-color: %s; color: %s; }
+                .shadow-composer.inherit-pane-style textview.composer-input,
+                .shadow-composer.inherit-pane-style textview.composer-input text { color: %s; caret-color: %s; }
+            """.printf (header_background, foreground, foreground, foreground, background, foreground, foreground, foreground));
         }
 
         public TerminalWindow shell_window (string session, int pid) throws IOError {
@@ -612,12 +781,13 @@ namespace Shadow {
     }
 }
 
+#if !PRESENTATION_TEST
 int main (string[] args) {
     if (args.length == 2 && args[1] == "--version") {
         stdout.printf ("Shadow Term %s\n", Shadow.VERSION); return 0;
     }
     if (args.length == 2 && (args[1] == "--help" || args[1] == "-h")) {
-        stdout.printf ("""Shadow Term 0.0.3 — interactive shell and command windows
+        stdout.printf ("""Shadow Term 0.0.4 — interactive shell and command windows
 Usage: shadow-term [OPTIONS] [-- COMMAND ARG...]
   --session NAME           Named session (default: default)
   --cwd DIRECTORY          Initial working directory (default: invoking directory)
@@ -642,3 +812,5 @@ only on its first invocation. Use a new name for an independent terminal.
         stderr.printf ("shadow-term: %s\n", error.message); return 2;
     }
 }
+
+#endif

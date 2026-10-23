@@ -3,9 +3,55 @@
 status is-interactive; or return
 set -q SHADOW_TERM_HELPER SHADOW_TERM_SESSION SHADOW_TERM_TOKEN; or return
 
+# Keep prompt drawing local to this shell. The original functions are retained
+# for native editing; no escape-code erasure or command-output filtering occurs.
+set --global __vcom_prompt_hidden 1
+functions --copy fish_prompt __vcom_saved_prompt
+if functions --query fish_right_prompt
+    functions --copy fish_right_prompt __vcom_saved_right_prompt
+end
+
+function __vcom_restore_status
+    return $argv[1]
+end
+
+function fish_prompt
+    set --local previous_status $status
+    if set --query __vcom_prompt_hidden
+        return $previous_status
+    end
+    __vcom_restore_status $previous_status
+    __vcom_saved_prompt
+end
+
+function fish_right_prompt
+    set --local previous_status $status
+    if set --query __vcom_prompt_hidden
+        return $previous_status
+    end
+    if functions --query __vcom_saved_right_prompt
+        __vcom_restore_status $previous_status
+        __vcom_saved_right_prompt
+    end
+end
+
+function __vcom_presentation
+    set --local previous_status $status
+    if command "$SHADOW_TERM_HELPER" presentation 2>/dev/null
+        set --global __vcom_prompt_hidden 1
+    else
+        set --erase __vcom_prompt_hidden
+    end
+    commandline --function repaint
+    return $previous_status
+end
+
 function __vcom_prompt --on-event fish_prompt
     set --local previous_status $status
-    command "$SHADOW_TERM_HELPER" ready 2>/dev/null
+    if not command "$SHADOW_TERM_HELPER" ready 2>/dev/null
+        # A disconnected host must not leave a usable native shell promptless.
+        set --erase __vcom_prompt_hidden
+    end
     return $previous_status
 end
 
@@ -54,3 +100,5 @@ end
 # This private input-function sequence carries no source or styling bytes.
 bind --mode default alt-ctrl-o __vcom_submit
 bind --mode insert alt-ctrl-o __vcom_submit
+bind --mode default alt-ctrl-p __vcom_presentation
+bind --mode insert alt-ctrl-p __vcom_presentation

@@ -6,13 +6,14 @@ int main (string[] args) {
             directory = DirUtils.make_tmp ("shadow-preferences-XXXXXX");
             string filename = Path.build_filename (directory, "preferences.ini");
             var settings = new Shadow.Preferences (filename);
-            settings.apply ("Monospace 14", "Sans 13", 0.65, 25000, false, false, "#112233", "#445566");
+            settings.apply ("Monospace 14", "Sans 13", 0.65, 25000, false, false, "#112233", "#445566", 0.5);
             var loaded = new Shadow.Preferences (filename);
             assert (loaded.terminal_font == "Monospace 14" && loaded.editor_font == "Sans 13");
             assert (loaded.opacity == 0.65 && loaded.scrollback == 25000);
             assert (!loaded.inherit_style && !loaded.system_colors);
             assert (loaded.foreground == "rgb(17,34,51)" && loaded.background == "rgb(68,85,102)");
             assert ((loaded.pane_background (false).alpha - 0.65).abs () < 0.001);
+            assert (loaded.header_opacity_boost == 0.5 && (loaded.header_background (false).alpha - 0.825).abs () < 0.001);
             assert ((loaded.pane_foreground (true).red - 17.0 / 255).abs () < 0.001);
             loaded.apply ("bad\nCSS", "Sans 5000", -1, -1);
             assert (loaded.terminal_font == "Monospace 14" && loaded.editor_font == "Sans 13");
