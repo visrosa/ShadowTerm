@@ -15,6 +15,16 @@ int main (string[] args) {
             var editor = (Gtk.FontDialogButton) grid.get_child_at (1, 1);
             var opacity = (Gtk.Scale) grid.get_child_at (1, 2);
             var lines = (Gtk.SpinButton) grid.get_child_at (1, 3);
+            var inherit = (Gtk.Switch) grid.get_child_at (1, 4);
+            var system = (Gtk.Switch) grid.get_child_at (1, 5);
+            var foreground = (Gtk.ColorDialogButton) grid.get_child_at (1, 6);
+            var background = (Gtk.ColorDialogButton) grid.get_child_at (1, 7);
+            assert (inherit.active && system.active && !foreground.sensitive && !background.sensitive);
+            inherit.active = false; system.active = false;
+            assert (foreground.sensitive && background.sensitive);
+            Gdk.RGBA fg = {}, bg = {};
+            fg.parse ("#ddeeff"); bg.parse ("#112233");
+            foreground.rgba = fg; background.rgba = bg;
             font.font_desc = Pango.FontDescription.from_string ("Monospace 16");
             editor.font_desc = Pango.FontDescription.from_string ("Sans Italic 14");
             opacity.set_value (70); lines.value = 17000;
@@ -26,6 +36,8 @@ int main (string[] args) {
             var loaded = new Shadow.Preferences (filename);
             assert (loaded.terminal_font == "Monospace 16" && loaded.editor_font == "Sans Italic 14");
             assert (loaded.opacity == 0.7 && loaded.scrollback == 17000);
+            assert (!loaded.inherit_style && !loaded.system_colors);
+            assert (loaded.foreground == fg.to_string () && loaded.background == bg.to_string ());
             parent.destroy ();
             FileUtils.unlink (filename);
         } catch (Error error) { Test.message (error.message); Test.fail (); }
