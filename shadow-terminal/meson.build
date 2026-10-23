@@ -1,4 +1,4 @@
-project('shadow-term', 'vala', 'c', version: '0.0.4')
+project('shadow-term', 'vala', 'c', version: '0.0.5')
 
 deps = [dependency('gtk4', version: '>=4.12'), dependency('granite-7', version: '>=7.7'),
         dependency('vte-2.91-gtk4', version: '>=0.78'), dependency('json-glib-1.0')]

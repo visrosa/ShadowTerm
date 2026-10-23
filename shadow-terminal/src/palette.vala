@@ -16,6 +16,7 @@ namespace Shadow {
     internal class CommandPalette : Gtk.Window {
         private Gtk.SearchEntry entry;
         private Gtk.ListBox list;
+        private Gtk.ScrolledWindow scroll;
         private List<UiCommand> commands;
 
         public CommandPalette (Gtk.Window parent, owned List<UiCommand> commands) {
@@ -55,7 +56,7 @@ namespace Shadow {
                     int index = selected == null ? (step > 0 ? -1 : (int) this.commands.length ()) : selected.get_index ();
                     for (int i = index + step; i >= 0 && i < this.commands.length (); i += step) {
                         var row = list.get_row_at_index (i);
-                        if (row.get_child_visible ()) { list.select_row (row); break; }
+                        if (row.get_child_visible ()) { select_row (row); break; }
                     }
                     return true;
                 }
@@ -63,7 +64,8 @@ namespace Shadow {
             });
             ((Gtk.Widget) this).add_controller (keys);
             box.append (entry);
-            box.append (new Gtk.ScrolledWindow () {child = list, vexpand = true, hscrollbar_policy = Gtk.PolicyType.NEVER});
+            scroll = new Gtk.ScrolledWindow () {child = list, vexpand = true, hscrollbar_policy = Gtk.PolicyType.NEVER};
+            box.append (scroll);
             child = box;
             select_first ();
             map.connect (() => entry.grab_focus ());
@@ -74,8 +76,22 @@ namespace Shadow {
             list.unselect_all ();
             for (int i = 0; i < commands.length (); i++) {
                 var row = list.get_row_at_index (i);
-                if (row.get_child_visible ()) { list.select_row (row); break; }
+                if (row.get_child_visible ()) { select_row (row); break; }
             }
+        }
+
+        private void select_row (Gtk.ListBoxRow row) {
+            list.select_row (row);
+            Idle.add (() => {
+                Graphene.Rect bounds = {};
+                if (row.compute_bounds (list, out bounds)) {
+                    var adjustment = scroll.vadjustment;
+                    if (bounds.origin.y < adjustment.value) adjustment.value = bounds.origin.y;
+                    else if (bounds.origin.y + bounds.size.height > adjustment.value + adjustment.page_size)
+                        adjustment.value = bounds.origin.y + bounds.size.height - adjustment.page_size;
+                }
+                return Source.REMOVE;
+            });
         }
 
         private void activate_row (Gtk.ListBoxRow? row) {

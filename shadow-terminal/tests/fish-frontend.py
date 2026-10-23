@@ -257,12 +257,21 @@ def worker(tmp):
         xdo("key", "Return")
         harness.wait_for(lambda: read("tab-draft") == "retained", "per-tab draft preservation")
         assert subprocess.check_output([binary, "--list"], env=env, text=True).split("\t")[-1] == before.split("\t")[-1]
-        subprocess.run([binary, "--session", "composer", "--quit"], env=env, check=True, timeout=4)
+        xdo("key", "ctrl+shift+t")
+        tab = harness.wait_for(new_tab, "second tab session")
+        harness.wait_for(lambda: "ready" in state(tab), "second tab readiness")
+        xdo("key", "ctrl+Page_Up")
+        harness.wait_for(visible, "previous tab shortcut")
+        xdo("key", "ctrl+Page_Down")
+        harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", " · " + tab + "$", check=False), "next tab shortcut")
+        children = [int(row.split("\t")[2]) for row in subprocess.check_output([binary, "--list"], env=env, text=True).splitlines()]
+        xdo("key", "ctrl+shift+q")
         app.wait(timeout=5)
+        assert all(not Path(f"/proc/{pid}").exists() for pid in children), "Window close must reap every tab's shell"
         logs.flush()
         data = (tmp / "frontend.log").read_text(errors="replace")
         assert "CRITICAL" not in data and "ERROR **" not in data, data
-        print("PASS: Composer fish input, builtin/quoted-file completion, Unicode/newline argv, status, multiline, recall, native-buffer guard, foreground stdin/interrupt, nested fish, cwd, concurrent drafts, cancellation/timeout, terminal search and preferences")
+        print("PASS: Composer fish input, completions, Unicode/multiline argv, status, recall, native-buffer guard, foreground input/interrupt, nested fish, cwd, concurrent drafts, cancellation/timeout, search, preferences, command palette, independent tabs, tab cycling and window cleanup")
     except Exception as error:
         if visible():
             subprocess.run(["import", "-display", env["DISPLAY"], "-window", visible().splitlines()[0],

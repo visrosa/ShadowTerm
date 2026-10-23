@@ -1,10 +1,10 @@
 # Shadow Term
 
-Shadow Term 0.0.4 is a GTK4/Vala terminal host for an interactive shell or any terminal command. [V Composer](../rich-input/README.md) is the normal input frontend for interactive fish; foreground programs receive ordinary terminal input. Each window owns a VTE emulator and PTY, including terminal replies, alternate-screen programs and resizing. It does not require ClaudeVassal, Kitty or layer-shell.
+Shadow Term 0.0.5 is a GTK4/Vala terminal host for an interactive shell or any terminal command. [V Composer](../rich-input/README.md) is the normal input frontend for interactive fish; foreground programs receive ordinary terminal input. Each tab owns a VTE emulator and PTY, including terminal replies, alternate-screen programs and resizing; a window arranges independent tabs in its headerbar. It does not require ClaudeVassal, Kitty or layer-shell.
 
 ## Build and launch
 
-Dependencies: Vala 0.56, Meson, Ninja, a C compiler, GTK ≥ 4.12, Granite ≥ 7.7, VTE GTK4 ≥ 0.78 and JSON-GLib. GTK's X11 backend and Xlib are optional build dependencies for automatic positioning. Run from this directory:
+Dependencies: Vala 0.56, Meson, Ninja, a C compiler, GTK ≥ 4.12, Granite ≥ 7.7, VTE GTK4 ≥ 0.78, PCRE2 headers and JSON-GLib. GTK's X11 backend and Xlib are optional build dependencies for automatic positioning. Run from this directory:
 
 ```fish
 env VALAC=valac-0.56 meson setup build
@@ -31,7 +31,7 @@ If the compiler is named `valac`, omit `VALAC=valac-0.56`. The build installs no
 ./build/shadow-term --session listing --hold -- ls -la
 ```
 
-One application process manages named sessions through the local session bus. The first invocation stays running while it owns sessions; subsequent invocations return after applying their request. Use `&` when launching from a shell that you want to keep using. Repeating the default invocation shows the existing `default` session; choose another name or use New Terminal for another PTY.
+One application process manages named sessions through the local session bus. The first invocation stays running while it owns sessions; subsequent invocations return after applying their request. Use `&` when launching from a shell that you want to keep using. Repeating the default invocation shows the existing `default` session; choose another name for a separate window, or use the header’s + button / New Tab for another PTY in the same window.
 
 ## Persistent and quick-access sessions
 
@@ -43,7 +43,7 @@ One application process manages named sessions through the local session bus. Th
 ./build/shadow-term --session work --quit
 ```
 
-Toggle hides a focused window and presents a hidden or unfocused one. Hide retains the child process, terminal state and Composer draft. Closing a window, Ctrl+Shift+W or `--quit` ends that session and signals its child/foreground process groups; normal child exit closes its window unless `--hold` was selected. Other sessions remain running. `--list` prints session name, visibility and child PID; zero indicates a launch failure or an exited held command. A spawn failure stays visible with a Restart action.
+Toggle hides a focused window or selects and presents the requested tab when it is hidden, in the background or unfocused. Hide retains all tabs, child processes, terminal states and Composer drafts in that window. Ctrl+Shift+W, the tab’s close button or `--quit` ends only that session and signals its child/foreground process groups. Closing a window or Ctrl+Shift+Q ends all its tabs; normal child exit closes only its tab unless `--hold` was selected. The last tab closes its window. Other windows remain running. `--list` prints session name, visibility and child PID; only a window’s selected, presented tab is reported as visible; zero indicates a launch failure or an exited held command. A spawn failure stays visible with a Restart action.
 
 For a taskittyUI-style launcher, point a desktop shortcut at a named command session:
 
@@ -53,7 +53,7 @@ For a taskittyUI-style launcher, point a desktop shortcut at a named command ses
 
 Build the complete tasklineUI package once; do not compile it on every toggle. Identical launch options can be repeated to control an existing session. Conflicting launch options produce an error instead of silently replacing a running command. Hide-on-focus-loss is armed only after actual activation; an activation request denied by the compositor leaves the window visible. Focus moves into this application's transient dialogs do not hide the parent. Global shortcut registration is left to the desktop.
 
-Initial sizing is constrained to available monitor geometry. User size is saved per session under `$XDG_STATE_HOME/shadow-term/geometry.ini` (normally `~/.local/state/shadow-term/geometry.ini`). X11 builds can center new windows and restore their position; native Wayland placement follows compositor policy. Showing an existing window preserves its geometry. Window-manager rules can override placement requests.
+Initial sizing is constrained to available monitor geometry. User size is saved under the window’s first-session identity in `$XDG_STATE_HOME/shadow-term/geometry.ini` (normally `~/.local/state/shadow-term/geometry.ini`). X11 builds can center new windows and restore their position; native Wayland placement follows compositor policy. Showing an existing window preserves its geometry. Window-manager rules can override placement requests.
 
 ## Composer and terminal input
 
@@ -62,7 +62,7 @@ With the default `--input auto`, an interactive fish session opens Composer in F
 - Enter submits the full draft. Shift+Enter inserts a line; Ctrl+Enter or Run submits without automatically adding a line when fish reports incomplete syntax.
 - An incomplete Enter submission stays editable and gains a line. Invalid syntax, a nonempty native fish buffer, cancellation or a three-second handoff timeout retain the draft. Cancel or Escape cancels a pending handoff; an accepted command has already been handed to fish.
 - The unchanged submitted draft clears; edits made while acceptance was pending remain. Composer Options contains a collapsed, read-only Last Input disclosure. Recall Last Input or Ctrl+Shift+L restores accepted source into an empty draft.
-- While a command runs, focus moves to VTE for its stdin, control keys and terminal interaction. At the next fish prompt, Composer regains focus if visible. Its draft remains editable while programs run, but Run is disabled.
+- While a command runs, focus moves to VTE for its stdin, control keys and terminal interaction. At the next fish prompt, Composer regains focus if visible. Composer collapses while fish is busy, reclaiming space for foreground programs, including alternate-screen TUIs; its draft and enabled preference survive. It returns at prompt readiness. This uses fish’s prompt/preexec notifications rather than parsing terminal escape sequences. The optional scratchpad in raw/native sessions remains manually controlled.
 - V Composer or Ctrl+Shift+M toggles the editor. Hide it to use native fish editing, history or completions. A partial native command must be finished or cleared before Composer can submit.
 
 The adapter is sourced through the launched fish process's `--init-command`; it changes no configuration files. It reserves Ctrl+Alt+O for source handoff and Ctrl+Alt+P for prompt presentation in that process's default and insert binding modes. It saves the existing left/right prompt functions and skips their drawing while Composer is active. Hiding Composer restores those functions, including their shell-status context, and repaints without changing a partial native input buffer. Prompt functions and their side effects do not run while suppressed. This intentionally replaces shell prompt emission; command source and program output are not filtered. Presentation changes wait for prompt readiness before sending any control binding, so foreground programs receive none of these control sequences. Nested fish sessions use native input. Code that later replaces the private bindings, prompt wrappers or event functions can disable the adapter; native terminal input remains available.
@@ -73,7 +73,7 @@ Last Input styles accepted source separately from VTE's terminal screen. Fish st
 
 ## Workspace and contextual controls
 
-The header keeps New Terminal and Terminal Options visible. Search, Composer visibility, preferences, shortcut help and session actions live in Terminal Options. Composer grows from a compact prompt to a bounded multiline input. Its options menu contains presentation mode, Markdown source/formatting, suggestions, recall, search, explicit terminal paste and Last Input. Run appears for a nonempty shell draft; Cancel appears only during a pending submission. The status strip appears for pending input, errors and held exits rather than repeating prompt instructions. This follows the elementary HIG's guidance on [contextual controls](https://docs.elementary.io/hig/widgets/avoid-widgets-that-do-nothing) and [tool ordering](https://docs.elementary.io/hig/widgets/creating-layouts); visible menus and shortcut labels preserve discovery.
+The header contains a horizontally scrollable tab strip, + (New Tab) and Terminal Options. Each tab retains its own shell, current directory, terminal contents, Composer draft and input state. New tabs start a fresh configured shell in the active tab’s directory; switching tabs never restarts a shell. The selected tab scrolls into view when necessary. The header follows Pane styling without a bottom separator. Search, Composer visibility, preferences, shortcut help and session actions live in Terminal Options. Composer grows from a compact prompt to a bounded multiline input. Its options menu contains presentation mode, Markdown source/formatting, suggestions, recall, search, explicit terminal paste and Last Input. Run appears for a nonempty shell draft; Cancel appears only during a pending submission. The status strip appears for pending input, errors and held exits rather than repeating prompt instructions. This follows the elementary HIG's guidance on [contextual controls](https://docs.elementary.io/hig/widgets/avoid-widgets-that-do-nothing) and [tool ordering](https://docs.elementary.io/hig/widgets/creating-layouts); visible menus and shortcut labels preserve discovery.
 
 The Composer context row displays the shell-reported working directory and, when available, Git branch and changed-entry count. Detached HEAD and unborn branches are supported. The tooltip includes upstream status from Git's branch header. It refreshes at prompt notifications/directory changes or through Refresh Repository; no idle polling or indexing runs. Git status is asynchronous, uses literal argv without optional locks or external fsmonitor, ignores submodule contents, and is bounded to 1.5 seconds/64 KiB. A count is Git status entries, not changed lines. Nonrepositories, unavailable Git and failed/oversized/timed-out results leave the repository label empty; stale results are discarded. This is advisory context, independent of command execution.
 
@@ -81,11 +81,15 @@ Keyboard Shortcuts is available from Terminal Options, or F1 while editing Compo
 
 Terminal controls and explicit source paste remain available in every mode:
 
-- Ctrl+Shift+N creates a terminal; Ctrl+Shift+H hides the current one.
-- Ctrl+Shift+C copies terminal selection; Ctrl+Shift+V pastes the clipboard. Ctrl+C remains the terminal's interrupt key.
+- + or Ctrl+Shift+T creates a tab; Ctrl+Shift+N creates a separate window. Ctrl+Page Up/Down cycles tabs. Ctrl+Shift+W closes a tab; Ctrl+Shift+Q closes its window and all tabs. Ctrl+Shift+H hides the window.
+- Ctrl+Shift+C copies terminal selection (or the right-click word target); Ctrl+Shift+V pastes the clipboard. Ctrl+C remains the terminal's interrupt key.
 - Ctrl+Shift+Plus/Minus zoom; Ctrl+Shift+0 resets font size. Mouse selection and scrolling are VTE operations.
 - Show Markdown Source in Composer Options reveals hidden markup in the [shared rich editor](../rich-input/README.md). The draft survives hide/show.
 - Paste into Terminal or Ctrl+Shift+Enter pastes the scratchpad's canonical source, including hidden delimiters, without clearing it or appending Enter. Ctrl+Shift+C in the scratchpad copies selected source including hidden characters; ordinary editor Ctrl+C retains GTK's visible-text behavior.
+
+Ctrl+Shift+P or Command Palette in Terminal Options opens searchable UI actions with shortcut hints. Type to filter, use Up/Down to choose, Enter to activate and Escape to dismiss. Available actions reuse the menu commands; palette queries never enter the shell.
+
+Secondary-clicking terminal text preserves an existing selection or highlights the word under the pointer and offers Copy, Paste and Command Palette. Word hit-testing uses VTE’s Unicode regex matcher and configured word-character exceptions. The host paints a temporary highlight and copies that word; it does not replace VTE’s native selection API. Wrapped words copy in full when VTE matches them, but the temporary highlight covers the clicked screen row only. Output changes, scrolling, typing or a primary click clear this target. Mouse handling remains VTE’s; a program’s mouse grab can take precedence over context-menu requests.
 
 [VTE's paste operation](https://gnome.pages.gitlab.gnome.org/vte/gtk4/method.Terminal.paste_text.html) uses bracketed paste when the child enables it. The running program determines paste semantics: multiline text can execute in shells without bracketed-paste support. Explicit paste is separate from Run's fish source handoff and ClaudeVassal's prompt-to-argv/cache protocol. Keyboard shortcuts work in the terminal and editor; GTK's normal clipboard and undo keys remain available in Composer.
 
@@ -101,6 +105,16 @@ Ctrl+Space or Suggestions opens an on-demand candidate list with contextual desc
 
 The first providers offer a small fish builtin/keyword help catalog, Markdown snippets and local filename completion. For example, `pri` suggests `printf`, and `cat ./Doc` can complete a local name. Filenames containing spaces, quotes, backslashes or Unicode are inserted as literal fish arguments. The shell-reported working directory supplies the lookup base. Only simple unquoted tokens are handled; quoted/escaped tokens and variable expressions retain native editing as a fallback. These providers do not invoke fish completion functions or commands. Functions, aliases, options, full fish history/completion and language-server integration remain separate extensions to the [provider interface](../rich-input/README.md#completion-providers).
 
+## Desktop identity
+
+The executable embeds an application icon and uses the stable application/WM-class identity `io.github.visrosa.Vibrant.ShadowTerm`. Register the existing build with the current user’s launcher, dock and task switcher:
+
+```fish
+python3 register-desktop.py
+```
+
+This writes a desktop entry and scalable icon under `$XDG_DATA_HOME` (normally `~/.local/share`), refreshes the desktop database when the utility is available, and launches nothing. The entry points to this build’s absolute path; rerun after moving the checkout. A differing existing desktop entry is preserved as `.desktop.previous`. The script refuses to overwrite that backup; executable paths containing line breaks or `%` are rejected. Restart an already-running older build to load its icon and window identity changes. Actual dock grouping remains desktop policy.
+
 ## Verification and limits
 
 ```fish
@@ -110,6 +124,8 @@ nice -n 15 python3 tests/integration.py --frontend
 nice -n 15 python3 tests/integration.py --presentation
 ```
 
-The integration checks require Python, fish, Xvfb, xdotool and D-Bus; the frontend check also uses PyGObject with GTK4 for exact Unicode clipboard input. They use a private software-X11 display, synthetic fish configuration and a private bus with service activation disabled. The baseline checks shell input, argv/cwd/environment, interrupts, PTY resize, process reuse, source/clipboard paste, focus/hide and child cleanup. The frontend check covers builtin/quoted-filename completion, literal terminal search, preferences access, Unicode and multiline argv, shell status, pipelines, incomplete syntax, recall, occupied native buffers, foreground stdin/interrupt, nested fish, concurrent draft edits, cancellation and timeout recovery. Editor/appearance checks also exercise formatting undo, source-aware search, stale provider results, preference persistence, live Composer/header colors and rendered alpha (including the relative header boost), unchanged source and narrow layouts. The native program fixture checks bare Page Up/Page Down/F1; frontend checks include multiline/right-prompt restoration, shell-status preservation and shortcut discovery. The private presentation test writes previews to `/tmp/shadow-term-ui-wide.png` and `/tmp/shadow-term-ui-narrow.png`; desktop compositor blending remains outside those rendered-alpha checks. They do not write real Taskwarrior data or use desktop windows. Test processes are cleaned up.
+The integration checks require Python, fish, Xvfb, xdotool, xprop, ImageMagick’s `import` and D-Bus; the frontend check also uses PyGObject with GTK4 for exact Unicode clipboard input. They use a private software-X11 display, synthetic fish configuration and a private bus with service activation disabled. The baseline checks shell input, argv/cwd/environment, interrupts, PTY resize, process reuse, source/clipboard paste, focus/hide and child cleanup. The frontend check covers builtin/quoted-filename completion, literal terminal search, preferences access, command-palette activation, independent tab drafts/PTYs, cycling, whole-window cleanup, Unicode and multiline argv, shell status, pipelines, incomplete syntax, recall, occupied native buffers, foreground stdin/interrupt, nested fish, concurrent draft edits, cancellation and timeout recovery. Editor/appearance checks also exercise formatting undo, source-aware search, stale provider results, preference persistence, live Composer/header colors and rendered alpha (including the relative header boost), unchanged source, foreground Composer collapse/restore, Unicode word hit-testing, real secondary-click copying, transparent popover corners and narrow layouts. The native program fixture checks bare Page Up/Page Down/F1; frontend checks include multiline/right-prompt restoration, shell-status preservation and shortcut discovery. The private presentation test writes previews to `/tmp/shadow-term-ui-wide.png` and `/tmp/shadow-term-ui-narrow.png`, with private popup captures in `/tmp/shadow-term-context-menu.png` and `/tmp/shadow-term-options-menu.png`; desktop compositor blending remains outside those rendered-alpha checks. They do not write real Taskwarrior data or use desktop windows. Test processes are cleaned up.
 
 The existing [CV shadow client](../rich-input/README.md) remains available independently. Composer supplies basic fish highlighting and the bounded suggestions above; full fish completion/history UI and syntax-highlighting parity are outside this version. Native editing remains reachable. This version provides authoritative command sessions; it does not capture/reparent another emulator's window or clone a running external terminal. Multiple views of one PTY, detach/reattach, a public raw-stream subscription API, arbitrary programmatic overlays/modals, desktop docking and Kitty image/text-sizing parity are separate extensions. In particular, tasklineUI's Kitty OSC 66 labels need a rendering compatibility check before assuming identical appearance. Native Wayland focus/placement, IME and assistive-technology behavior require actual-desktop validation; isolated X11 checks do not establish those properties.
+
+[gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) is a possible optional panel backend for Wayland compositors implementing Layer Shell. It does not supply that protocol on unsupported compositors, GNOME Wayland or X11. Ordinary Shadow Term windows and dock identity do not depend on it.

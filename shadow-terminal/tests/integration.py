@@ -267,7 +267,7 @@ def main():
     clean_env = os.environ.copy()
     clean_env.pop("DISPLAY", None)
     clean_env.pop("WAYLAND_DISPLAY", None)
-    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.4"
+    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.5"
     assert subprocess.run([str(BINARY), "--size", "3x4"], env=clean_env, capture_output=True).returncode == 2
     with tempfile.TemporaryDirectory(prefix="shadow-term-test-") as directory:
         tmp = Path(directory)

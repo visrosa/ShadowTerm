@@ -779,7 +779,7 @@ int main (string[] args) {
         stdout.printf ("Shadow Term %s\n", Shadow.VERSION); return 0;
     }
     if (args.length == 2 && (args[1] == "--help" || args[1] == "-h")) {
-        stdout.printf ("""Shadow Term 0.0.4 — interactive shell and command windows
+        stdout.printf ("""Shadow Term 0.0.5 — interactive shell and command windows
 Usage: shadow-term [OPTIONS] [-- COMMAND ARG...]
   --session NAME           Named session (default: default)
   --cwd DIRECTORY          Initial working directory (default: invoking directory)
