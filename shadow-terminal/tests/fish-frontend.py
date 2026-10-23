@@ -65,6 +65,25 @@ def worker(tmp):
         time.sleep(0.15)
         command(f"printf '%s' $status > {tmp}/prior-status", "prior-status")
         assert read("prior-status") == "1", read("prior-status")
+        # Enter accepts a suggestion as an edit; it must not run it immediately.
+        text("pri")
+        xdo("key", "ctrl+space")
+        time.sleep(0.15)
+        xdo("key", "Return")
+        text(f" '%s' completion > {tmp}/completion")
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("completion") == "completion", "builtin completion insertion")
+        harness.wait_for(lambda: "ready" in state(), "ready after completion")
+        filename = "vcomfixture 'quote\\ 日本.txt"
+        (tmp / filename).write_text("filename completion\n")
+        text("cat ./vcomfi")
+        xdo("key", "ctrl+space")
+        time.sleep(0.15)
+        xdo("key", "Tab")
+        text(f" > {tmp}/file-completion")
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("file-completion") == "filename completion\n", "quoted filename completion")
+        harness.wait_for(lambda: "ready" in state(), "ready after filename completion")
         capture = tmp / "capture.py"
         capture.write_text("import json,sys\nfrom pathlib import Path\n"
                            f"Path({str(tmp / 'argv')!r}).write_text(json.dumps(sys.argv[1:]))\n")
@@ -180,12 +199,25 @@ def worker(tmp):
         time.sleep(0.1)
         xdo("key", "ctrl+shift+m", "Return")
         harness.wait_for(lambda: read("expired") == "retry", "expired draft retry")
+        harness.wait_for(lambda: "ready" in state(), "ready before search")
+        command(f"printf 'FIND-TOKEN[one]\\n'; printf ready > {tmp}/search-ready", "search-ready")
+        xdo("key", "ctrl+shift+f")
+        text("FIND-TOKEN[one]")
+        xdo("key", "Return", "ctrl+shift+c")
+        selected = subprocess.check_output([sys.executable, str(HERE / "clipboard.py"), "--read"],
+                                           env=env, text=True, timeout=4)
+        assert selected == "FIND-TOKEN[one]", selected
+        xdo("key", "Escape", "ctrl+comma")
+        prefs = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Preferences$", check=False), "preferences window")
+        xdo("windowfocus", "--sync", prefs.splitlines()[0])
+        xdo("key", "Escape")
+        harness.wait_for(lambda: not xdo("search", "--onlyvisible", "--name", "^Preferences$", check=False), "preferences dismissal")
         subprocess.run([binary, "--session", "composer", "--quit"], env=env, check=True, timeout=4)
         app.wait(timeout=5)
         logs.flush()
         data = (tmp / "frontend.log").read_text(errors="replace")
         assert "CRITICAL" not in data and "ERROR **" not in data, data
-        print("PASS: Composer fish input, exact Unicode/newline argv, status, multiline, recall, native-buffer guard, foreground stdin/interrupt, nested fish, cwd, concurrent drafts, cancellation and timeout")
+        print("PASS: Composer fish input, builtin/quoted-file completion, Unicode/newline argv, status, multiline, recall, native-buffer guard, foreground stdin/interrupt, nested fish, cwd, concurrent drafts, cancellation/timeout, terminal search and preferences")
     except Exception as error:
         if visible():
             subprocess.run(["import", "-display", env["DISPLAY"], "-window", visible().splitlines()[0],
