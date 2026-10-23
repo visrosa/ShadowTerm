@@ -1,6 +1,6 @@
 # Shadow Term
 
-Shadow Term 0.0.1 is a GTK4/Vala terminal host for an interactive shell or any terminal command. Each window owns a VTE emulator and PTY, including keyboard input, terminal replies, alternate-screen programs and resizing. It does not require ClaudeVassal, Kitty or layer-shell.
+Shadow Term 0.0.2 is a GTK4/Vala terminal host for an interactive shell or any terminal command. [V Composer](../rich-input/README.md) is the normal input frontend for interactive fish; foreground programs receive ordinary terminal input. Each window owns a VTE emulator and PTY, including terminal replies, alternate-screen programs and resizing. It does not require ClaudeVassal, Kitty or layer-shell.
 
 ## Build and launch
 
@@ -12,11 +12,17 @@ nice -n 15 meson compile -C build -j 1
 ./build/shadow-term
 ```
 
-If the compiler is named `valac`, omit `VALAC=valac-0.56`. The build installs nothing. The terminal launches `$SHELL`, falling back to `/bin/sh`, in the invoking directory. Shell startup configuration works normally. `--help` and `--version` work without a display.
+If the compiler is named `valac`, omit `VALAC=valac-0.56`. The build installs nothing. The terminal launches `$SHELL`, falling back to `/bin/sh`, in the invoking directory. Shell startup configuration works normally. Keep the source tree and build directory in place: the executable uses their fish adapter and helper paths. `--help` and `--version` work without a display.
 
 ```fish
 # A separate shell session, with a preferred initial size in logical pixels.
 ./build/shadow-term --session work --cwd ~/Homework --size 1100x750
+
+# Explicitly select Composer with fish, regardless of $SHELL.
+./build/shadow-term --session composer --input composer -- fish
+
+# Use the shell's native terminal editor instead.
+./build/shadow-term --session native --input terminal -- fish
 
 # An arbitrary command, with literal arguments after --.
 ./build/shadow-term --session monitor -- top
@@ -37,7 +43,7 @@ One application process manages named sessions through the local session bus. Th
 ./build/shadow-term --session work --quit
 ```
 
-Toggle hides a focused window and presents a hidden or unfocused one. Hide retains the child process, terminal state and scratchpad. Closing a window, Ctrl+Shift+W or `--quit` ends that session and signals its child/foreground process groups; normal child exit closes its window unless `--hold` was selected. Other sessions remain running. `--list` prints session name, visibility and child PID; zero indicates a launch failure or an exited held command. A spawn failure stays visible with a Restart action.
+Toggle hides a focused window and presents a hidden or unfocused one. Hide retains the child process, terminal state and Composer draft. Closing a window, Ctrl+Shift+W or `--quit` ends that session and signals its child/foreground process groups; normal child exit closes its window unless `--hold` was selected. Other sessions remain running. `--list` prints session name, visibility and child PID; zero indicates a launch failure or an exited held command. A spawn failure stays visible with a Restart action.
 
 For a taskittyUI-style launcher, point a desktop shortcut at a named command session:
 
@@ -49,23 +55,40 @@ Build the complete tasklineUI package once; do not compile it on every toggle. I
 
 Initial sizing is constrained to available monitor geometry. User size is saved per session under `$XDG_STATE_HOME/shadow-term/geometry.ini` (normally `~/.local/state/shadow-term/geometry.ini`). X11 builds can center new windows and restore their position; native Wayland placement follows compositor policy. Showing an existing window preserves its geometry. Window-manager rules can override placement requests.
 
-## Terminal and rich scratchpad
+## Composer and terminal input
+
+With the default `--input auto`, an interactive fish session opens Composer in Fish mode and focuses it at each prompt. `--input composer` requires interactive fish; `--input terminal` disables the adapter. Other shells, fish scripts and `fish -c` use ordinary VTE input. Markdown/Fish chooses presentation only; commands still follow fish syntax.
+
+- Enter submits the full draft. Shift+Enter inserts a line; Ctrl+Enter or Run submits without automatically adding a line when fish reports incomplete syntax.
+- An incomplete Enter submission stays editable and gains a line. Invalid syntax, a nonempty native fish buffer, cancellation or a three-second handoff timeout retain the draft. Cancel or Escape cancels a pending handoff; an accepted command has already been handed to fish.
+- Accepted input appears in a read-only, styled Last input card above the terminal. The unchanged submitted draft clears; edits made while acceptance was pending remain. Recall Last or Ctrl+Shift+L restores accepted source into an empty draft.
+- While a command runs, focus moves to VTE for its stdin, control keys and terminal interaction. At the next fish prompt, Composer regains focus if visible. Its draft remains editable while programs run, but Run is disabled.
+- V Composer or Ctrl+Shift+M toggles the editor. Hide it to use native fish editing, history or completions. A partial native command must be finished or cleared before Composer can submit.
+
+The adapter is sourced through the launched fish process's `--init-command`; it changes no configuration files. It reserves Ctrl+Alt+O in that process's default and insert binding modes for the source handoff. Nested fish sessions use native input. User startup code that later replaces this binding or removes the event functions can disable the adapter; native terminal input remains available.
+
+Composer retains canonical UTF-8 source, including hidden Markdown delimiters and trailing newlines. Each submission is limited to 65,536 bytes. `input-session.vala` tracks readiness and one pending handoff. A local D-Bus bridge and GIO-only `vcom-shell` helper transfer source with per-spawn identity and one-use retrieval. The PTY carries only the binding's key sequence; fish sets its ordinary commandline buffer, validates syntax and invokes its native execute action. Transport code never evaluates or shell-quotes the source. Prompt and preexec events report state; no background polling is needed.
+
+The Last input card styles the accepted source separately from VTE's unchanged terminal screen. Fish still echoes and executes its ordinary commandline, and program output is not rewritten. This adapter is one concrete Composer/Pane/shell arrangement; the general component routing remains replaceable.
+
+Terminal controls and explicit source paste remain available in every mode:
 
 - Ctrl+Shift+N creates a terminal; Ctrl+Shift+H hides the current one.
 - Ctrl+Shift+C copies terminal selection; Ctrl+Shift+V pastes the clipboard. Ctrl+C remains the terminal's interrupt key.
 - Ctrl+Shift+Plus/Minus zoom; Ctrl+Shift+0 resets font size. Mouse selection and scrolling are VTE operations.
-- Compose or Ctrl+Shift+M opens a Markdown/fish scratchpad using the [shared rich editor](../rich-input/README.md). Show Source reveals hidden markup. The draft survives hide/show.
+- Show Source reveals hidden markup in the [shared rich editor](../rich-input/README.md). The draft survives hide/show.
 - Paste into Terminal or Ctrl+Shift+Enter pastes the scratchpad's canonical source, including hidden delimiters, without clearing it or appending Enter. Ctrl+Shift+C in the scratchpad copies selected source including hidden characters; ordinary editor Ctrl+C retains GTK's visible-text behavior.
 
-[VTE's paste operation](https://gnome.pages.gitlab.gnome.org/vte/gtk4/method.Terminal.paste_text.html) uses bracketed paste when the child enables it. The running program determines paste semantics: multiline text can execute in shells without bracketed-paste support. This is a terminal paste operation, separate from ClaudeVassal's exact prompt-to-argv/cache protocol. Keyboard shortcuts work in the terminal and scratchpad; GTK's normal clipboard and undo keys remain available in the editor.
+[VTE's paste operation](https://gnome.pages.gitlab.gnome.org/vte/gtk4/method.Terminal.paste_text.html) uses bracketed paste when the child enables it. The running program determines paste semantics: multiline text can execute in shells without bracketed-paste support. Explicit paste is separate from Run's fish source handoff and ClaudeVassal's prompt-to-argv/cache protocol. Keyboard shortcuts work in the terminal and editor; GTK's normal clipboard and undo keys remain available in Composer.
 
 ## Verification and limits
 
 ```fish
 nice -n 15 meson test -C build --num-processes 1 --print-errorlogs
 nice -n 15 python3 tests/integration.py
+nice -n 15 python3 tests/integration.py --frontend
 ```
 
-The integration check requires Python, fish, Xvfb, xdotool and D-Bus. It uses a private software-X11 display and a private bus with service activation disabled. It checks real shell input, argv/cwd/environment, interrupt handling, PTY resize, process reuse, rich-source and clipboard paste, focus/hide and child cleanup. It does not write real Taskwarrior data or use desktop windows. Test processes are cleaned up.
+The integration checks require Python, fish, Xvfb, xdotool and D-Bus; the frontend check also uses PyGObject with GTK4 for exact Unicode clipboard input. They use a private software-X11 display, synthetic fish configuration and a private bus with service activation disabled. The baseline checks shell input, argv/cwd/environment, interrupts, PTY resize, process reuse, source/clipboard paste, focus/hide and child cleanup. The frontend check covers Unicode and multiline argv, shell status, pipelines, incomplete syntax, recall, occupied native buffers, foreground stdin/interrupt, nested fish, concurrent draft edits, cancellation and timeout recovery. They do not write real Taskwarrior data or use desktop windows. Test processes are cleaned up.
 
-The existing [CV shadow client](../rich-input/README.md) remains available independently. This version provides authoritative command sessions; it does not capture/reparent another emulator's window or clone a running external terminal. Multiple views of one PTY, detach/reattach, a public raw-stream subscription API, arbitrary programmatic overlays/modals, desktop docking and Kitty image/text-sizing parity are separate extensions. In particular, tasklineUI's Kitty OSC 66 labels need a rendering compatibility check before assuming identical appearance. Native Wayland focus/placement, IME and assistive-technology behavior require actual-desktop validation; isolated X11 checks do not establish those properties.
+The existing [CV shadow client](../rich-input/README.md) remains available independently. Composer supplies basic fish highlighting; fish completion/history UI and full syntax-highlighting parity are outside this version. Native editing remains reachable. This version provides authoritative command sessions; it does not capture/reparent another emulator's window or clone a running external terminal. Multiple views of one PTY, detach/reattach, a public raw-stream subscription API, arbitrary programmatic overlays/modals, desktop docking and Kitty image/text-sizing parity are separate extensions. In particular, tasklineUI's Kitty OSC 66 labels need a rendering compatibility check before assuming identical appearance. Native Wayland focus/placement, IME and assistive-technology behavior require actual-desktop validation; isolated X11 checks do not establish those properties.
