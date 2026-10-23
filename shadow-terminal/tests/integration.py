@@ -280,6 +280,10 @@ def main():
         (tmp / "config/fish/config.fish").write_text(
             "function fish_prompt\n set -l previous_status $status\n printf 'LEFT[%s]\\n> ' $previous_status\nend\n"
             "function fish_right_prompt; printf RIGHT; end\nfunction fish_greeting; end\n")
+        # A fresh GTK compose cache must not compile the user's custom table.
+        compose = tmp / "config/gtk-4.0/Compose"
+        compose.parent.mkdir()
+        compose.write_text('<Multi_key> <a> <e> : "\u00e6" ae\n')
         read_fd, write_fd = os.pipe()
         display_log = open(tmp / "display.log", "w+")
         server = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1200x900x24",
@@ -295,7 +299,9 @@ def main():
             env = os.environ | {"DISPLAY": display, "GDK_BACKEND": "x11", "GSK_RENDERER": "cairo",
                                 "LIBGL_ALWAYS_SOFTWARE": "1", "GTK_A11Y": "none", "GTK_USE_PORTAL": "0",
                                 "GIO_USE_VFS": "local", "SHADOW_TERM_PRIVATE_TEST": "1", "XDG_CONFIG_HOME": str(tmp / "config"),
-                                "XDG_STATE_HOME": str(tmp / "state"), "SHELL": "/usr/bin/fish"}
+                                "XDG_STATE_HOME": str(tmp / "state"), "XDG_DATA_HOME": str(tmp / "data"),
+                                "XDG_CACHE_HOME": str(tmp / "cache"), "fish_history": "shadow_term_test",
+                                "SHELL": "/usr/bin/fish"}
             arguments = ["dbus-run-session", "--config-file=" + str(config), "--", sys.executable,
                          str(Path(__file__).resolve()), "--worker", str(tmp)]
             if args.frontend:
@@ -307,6 +313,11 @@ def main():
             if result.returncode:
                 app_log = "\n".join(p.read_text(errors="replace") for p in (tmp / "app.log", tmp / "frontend.log") if p.exists())
                 raise AssertionError(result.stdout + result.stderr + "\n" + app_log)
+            if not args.presentation:
+                # Interactive fish persists history in its data directory,
+                # independently of the configuration directory and display.
+                history = tmp / "data/fish/shadow_term_test_history"
+                assert history.exists() and str(tmp).encode() in history.read_bytes(), "Missing isolated fish history"
             print(result.stdout.strip())
         finally:
             server.terminate()
