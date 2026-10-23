@@ -16,3 +16,6 @@ executable('shadow-term', 'src/options.vala', 'src/application.vala', 'src/place
 options_test = executable('options-test', 'src/options.vala', 'tests/options-test.vala',
                           dependencies: dependency('json-glib-1.0'))
 test('options', options_test)
+editor_checks = configure_file(input: '../rich-input/tests/editor-test.vala',
+                               output: 'editor-test.vala', copy: true)
+executable('editor-test', editor, editor_checks, dependencies: dependency('gtk4'), install: false)

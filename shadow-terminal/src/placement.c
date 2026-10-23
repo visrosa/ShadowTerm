@@ -33,6 +33,21 @@ gboolean shadow_position(GtkWindow *window, int x, int y, gboolean restore) {
         if (!monitor) return FALSE;
         GdkRectangle bounds;
         gdk_monitor_get_geometry(monitor, &bounds);
+        if (restore) {
+            GListModel *monitors = gdk_display_get_monitors(gdisplay);
+            for (guint i = 0; i < g_list_model_get_n_items(monitors); i++) {
+                GdkMonitor *candidate = g_list_model_get_item(monitors, i);
+                GdkRectangle candidate_bounds;
+                gdk_monitor_get_geometry(candidate, &candidate_bounds);
+                gboolean contains = x >= candidate_bounds.x && y >= candidate_bounds.y &&
+                    x < candidate_bounds.x + candidate_bounds.width && y < candidate_bounds.y + candidate_bounds.height;
+                g_object_unref(candidate);
+                if (contains) {
+                    bounds = candidate_bounds;
+                    break;
+                }
+            }
+        }
         int width = gdk_surface_get_width(surface), height = gdk_surface_get_height(surface);
         if (!restore || x + width < bounds.x || y + height < bounds.y ||
             x >= bounds.x + bounds.width || y >= bounds.y + bounds.height) {

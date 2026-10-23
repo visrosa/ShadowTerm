@@ -22,11 +22,15 @@ namespace Shadow {
         private uint blur_idle = 0;
         private uint kill_timeout = 0;
         private string[] environment;
+        private weak Host host;
+        private Gtk.DropDown mode;
+        private Gtk.ToggleButton compose_button;
         public signal void ended ();
 
-        public TerminalWindow (Host host, Request request, string[] environment) {
-            Object (application: host);
-            this.request = request;
+        public TerminalWindow (Host owner, Request config, string[] environment) {
+            Object (application: owner);
+            this.host = owner;
+            this.request = config;
             this.environment = environment;
             geometry = new Geometry (request.session);
             int width = request.width > 0 ? request.width : geometry.width;
@@ -62,14 +66,14 @@ namespace Shadow {
             var hide_button = new Gtk.Button.from_icon_name ("window-minimize-symbolic") {tooltip_text = "Hide Session (Ctrl+Shift+H)"};
             hide_button.clicked.connect (hide_session);
             header.pack_end (hide_button);
-            var compose_button = new Gtk.ToggleButton.with_label ("Compose") {tooltip_text = "Show rich scratchpad (Ctrl+Shift+M)"};
+            compose_button = new Gtk.ToggleButton.with_label ("Compose") {tooltip_text = "Show rich scratchpad (Ctrl+Shift+M)"};
             header.pack_end (compose_button);
             set_titlebar (header);
 
             var tools = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8) {
                 margin_start = 12, margin_end = 12, margin_top = 8, margin_bottom = 8
             };
-            var mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
+            mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
             mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
             var source = new Gtk.ToggleButton.with_label ("Show Source");
             source.bind_property ("active", editor, "source-mode", BindingFlags.SYNC_CREATE);
@@ -158,7 +162,9 @@ namespace Shadow {
                 if (kill_timeout != 0) { Source.remove (kill_timeout); kill_timeout = 0; }
                 if (closing || !request.hold) finish ();
                 else {
-                    feedback.label = "Process exited (status %d) · %s".printf (status, request.session);
+                    string result = Process.if_exited (status) ? "exit %d".printf (Process.exit_status (status)) :
+                        "signal %d".printf ((int) Process.term_sig (status));
+                    feedback.label = "Process ended (%s) · %s".printf (result, request.session);
                     restart.visible = true;
                 }
             });
