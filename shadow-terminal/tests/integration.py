@@ -90,6 +90,11 @@ def worker(tmp):
         track(pid)
         assert "fish" in Path(f"/proc/{pid}/cmdline").read_text()
         wid = focus("default")
+        identity_properties = subprocess.check_output(
+            ["xprop", "-id", wid, "WM_CLASS", "_GTK_APPLICATION_ID"], env=env, text=True)
+        assert identity_properties.count("io.github.visrosa.Vibrant.ShadowTerm") >= 2, identity_properties
+        icon_property = subprocess.check_output(["xprop", "-id", wid, "_NET_WM_ICON"], env=env, text=True)
+        assert "not found" not in icon_property and "no such atom" not in icon_property, "Missing application icon"
         shell(f"printf '%s' ready > {tmp}/ready")
         wait_for(lambda: read(tmp / "ready") == "ready", "interactive fish input")
         shell(f"pwd > {tmp}/cwd; printf '%s\\n' $TERM $TERM_PROGRAM > {tmp}/env")

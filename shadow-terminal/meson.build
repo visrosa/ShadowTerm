@@ -2,6 +2,9 @@ project('shadow-term', 'vala', 'c', version: '0.0.4')
 
 deps = [dependency('gtk4', version: '>=4.12'), dependency('granite-7', version: '>=7.7'),
         dependency('vte-2.91-gtk4', version: '>=0.78'), dependency('json-glib-1.0')]
+pcre2 = dependency('libpcre2-8')
+# Only the C hit-testing helper uses PCRE2's compile-flag constants.
+app_includes = [include_directories('src'), include_directories(pcre2.get_variable(pkgconfig: 'includedir'))]
 x11 = dependency('gtk4-x11', required: false)
 xlib = dependency('x11', required: false)
 cflags = ['-DGETTEXT_PACKAGE="shadow-term"']
@@ -16,15 +19,18 @@ config = configuration_data()
 config.set_quoted('SHELL_HELPER_PATH', meson.current_build_dir() / 'vcom-shell')
 config.set_quoted('FISH_INTEGRATION_PATH', meson.current_source_dir() / 'integration/fish.fish')
 paths = configure_file(input: 'src/config.vala.in', output: 'config.vala', configuration: config)
+gnome = import('gnome')
+resources = gnome.compile_resources('shadow-resources', 'data/resources.xml', source_dir: 'data', c_name: 'shadow')
 executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'), install: false)
-app_sources = files('src/options.vala', 'src/application.vala', 'src/placement.c',
+app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/palette.vala',
+                    'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/context.vala')
-app_sources += [paths, editor, completion, assistance]
+app_sources += [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
-           c_args: cflags, include_directories: include_directories('src'), install: false)
+           c_args: cflags, include_directories: app_includes, install: false)
 executable('presentation-test', app_sources, 'tests/presentation-test.vala', dependencies: deps,
            vala_args: ['--pkg=posix', '--define=PRESENTATION_TEST'], c_args: cflags,
-           include_directories: include_directories('src'), install: false)
+           include_directories: app_includes, install: false)
 options_test = executable('options-test', 'src/options.vala', 'tests/options-test.vala',
                           dependencies: dependency('json-glib-1.0'))
 test('options', options_test)

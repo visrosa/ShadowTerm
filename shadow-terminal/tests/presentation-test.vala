@@ -22,6 +22,24 @@ private RichInput? find_editor (Gtk.Widget widget) {
     return null;
 }
 
+private Gtk.Button? find_button (Gtk.Widget widget, string label) {
+    if (widget is Gtk.Button && ((Gtk.Button) widget).label == label) return (Gtk.Button) widget;
+    for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
+        var result = find_button (child, label);
+        if (result != null) return result;
+    }
+    return null;
+}
+
+private string run_private (string[] command) throws Error {
+    string output;
+    int status;
+    string[] private_env = Environ.unset_variable (Environ.get (), "DEBUG");
+    Process.spawn_sync (null, command, private_env, SpawnFlags.SEARCH_PATH, null, out output, null, out status);
+    Process.check_wait_status (status);
+    return output.strip ();
+}
+
 private Gdk.Texture texture (Gtk.Widget widget, Gtk.Window window) {
     var snapshot = new Gtk.Snapshot ();
     var paintable = new Gtk.WidgetPaintable (widget);
@@ -51,8 +69,10 @@ int main (string[] args) {
             request.session = "private-style-test";
             request.cwd = Environment.get_tmp_dir ();
             request.width = 920; request.height = 650;
-            var window = new Shadow.TerminalWindow (host, request, Environ.get ());
-            window.present ();
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session);
+            window.present_session (session);
             settle ();
             var surface = find_surface (window.child);
             assert (surface != null);
@@ -82,12 +102,61 @@ int main (string[] args) {
             assert (editor.source () == source);
             // Give the synthetic preview a running-session presentation without
             // launching a shell or connecting it to the real user environment.
-            window.running = true;
+            session.running = true;
+            session.input_session.report (session.input_session.token, "ready", "");
+            editor.buffer.text = "preserved draft";
+            session.input_session.report (session.input_session.token, "busy", "");
+            settle ();
+            assert (!surface.get_mapped ());
+            session.input_session.report (session.input_session.token, "ready", "");
+            settle ();
+            assert (surface.get_mapped () && editor.source () == "preserved draft");
             editor.buffer.text = "";
             host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, false, "#f6f5f4", "#20242b");
-            window.terminal.feed ("Shadow Term\r\n\r\nA quieter workspace for commands and their output.\r\n".data);
+            session.terminal.feed ("Shadow Term\r\n日本語 résumé.md\r\n\r\nA quieter workspace for commands and their output.\r\n".data);
+            settle ();
+            double cell_width = session.terminal.get_char_width ();
+            double cell_height = session.terminal.get_char_height ();
+            var word = Shadow.WordSelection.at (session.terminal, cell_width * 2.5, cell_height * 0.5);
+            assert (word != null && word.text () == "Shadow");
+            word = Shadow.WordSelection.at (session.terminal, cell_width * 1.5, cell_height * 1.5);
+            assert (word != null && word.text () == "日本語");
+            word = Shadow.WordSelection.at (session.terminal, cell_width * 9.5, cell_height * 1.5);
+            assert (word != null && word.text () == "résumé.md");
+            // Exercise the actual pointer event and clipboard path, including
+            // VTE's conversion from widget padding to terminal coordinates.
+            var padding = session.terminal.get_style_context ().get_padding ();
+            Graphene.Point point = {}, target = {};
+            point.x = (float) (padding.left + cell_width * 2.5);
+            point.y = (float) (padding.top + cell_height * 0.5);
+            assert (session.terminal.compute_point (window, point, out target));
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", " · private-style-test$"});
+            run_private ({"xdotool", "mousemove", "--window", wid, ((int) target.x).to_string (), ((int) target.y).to_string (), "click", "3"});
+            settle ();
+            var popup = session.terminal.get_context_menu ();
+            assert (popup != null && popup.get_mapped ());
+            var copy = find_button (popup, "Copy");
+            assert (copy != null && copy.sensitive);
+            run_private ({"import", "-window", "root", "/tmp/shadow-term-context-menu.png"});
+            copy.clicked ();
+            string? copied = null;
+            var clipboard_loop = new MainLoop ();
+            session.terminal.get_clipboard ().read_text_async.begin (null, (obj, result) => {
+                try { copied = session.terminal.get_clipboard ().read_text_async.end (result); }
+                catch (Error error) { Test.message (error.message); }
+                clipboard_loop.quit ();
+            });
+            clipboard_loop.run ();
+            assert (copied == "Shadow");
             settle ();
             assert (texture (window, window).save_to_png ("/tmp/shadow-term-ui-wide.png"));
+            session.menu.popup ();
+            settle ();
+            // Styling the outer popover node paints a square behind the
+            // theme's rounded content. Its corner must remain transparent.
+            assert (background_alpha (session.menu.popover, window) < 20);
+            run_private ({"import", "-window", "root", "/tmp/shadow-term-options-menu.png"});
+            session.menu.popdown ();
             host.preferences.apply ("Monospace 12", "Monospace 12", 0.5, 10000, false, false, "#ddeeff", "#123456");
             settle ();
             assert (!surface.has_css_class ("inherit-pane-style"));
@@ -97,8 +166,8 @@ int main (string[] args) {
             settle ();
             assert (window.get_width () <= 440);
             assert (texture (window, window).save_to_png ("/tmp/shadow-term-ui-narrow.png"));
-            window.running = false;
-            window.end_session ();
+            session.running = false;
+            session.end_session ();
             // This test has its own process and private XDG configuration.
             host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000);
         } catch (Error error) { Test.message (error.message); Test.fail (); }

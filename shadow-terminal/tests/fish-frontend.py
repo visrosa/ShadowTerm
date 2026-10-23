@@ -42,10 +42,10 @@ def worker(tmp):
         harness.wait_for(lambda: read(marker), marker)
         time.sleep(0.08)
 
-    def state():
+    def state(session="composer"):
         result = subprocess.run(["gdbus", "call", "--session", "--dest", "io.github.visrosa.Vibrant.ShadowTerm",
                                  "--object-path", "/io/github/visrosa/Vibrant/Shell", "--method",
-                                 "io.github.visrosa.Vibrant.Shell1.GetState", "composer"],
+                                 "io.github.visrosa.Vibrant.Shell1.GetState", session],
                                 env=env, capture_output=True, text=True, timeout=3)
         return result.stdout.strip()
 
@@ -229,6 +229,34 @@ def worker(tmp):
         xdo("windowfocus", "--sync", prefs.splitlines()[0])
         xdo("key", "Escape")
         harness.wait_for(lambda: not xdo("search", "--onlyvisible", "--name", "^Preferences$", check=False), "preferences dismissal")
+        xdo("windowfocus", "--sync", wid)
+        # The palette filters UI actions; its query is never shell input.
+        xdo("key", "ctrl+shift+p")
+        palette = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Command Palette$", check=False), "command palette")
+        xdo("windowfocus", "--sync", palette.splitlines()[0])
+        text("keyboard shortcuts")
+        xdo("key", "Return")
+        help_window = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Keyboard Shortcuts$", check=False), "palette activation")
+        xdo("windowfocus", "--sync", help_window.splitlines()[0])
+        xdo("key", "Escape")
+        xdo("windowfocus", "--sync", wid)
+        time.sleep(0.08)
+        text(f"printf retained > {tmp}/tab-draft")
+        before = subprocess.check_output([binary, "--list"], env=env, text=True)
+        xdo("key", "ctrl+shift+t")
+        def new_tab():
+            rows = subprocess.check_output([binary, "--list"], env=env, text=True).splitlines()
+            return next((row.split("\t")[0] for row in rows if row.startswith("tab-")), None)
+        tab = harness.wait_for(new_tab, "new tab session")
+        harness.wait_for(lambda: "ready" in state(tab), "new tab readiness")
+        windows = xdo("search", "--onlyvisible", "--name", " · (composer|tab-[0-9a-f]+)$", check=False).splitlines()
+        assert windows == [wid], windows
+        command(f"printf separate > {tmp}/tab-command", "tab-command")
+        xdo("key", "ctrl+shift+w")
+        harness.wait_for(lambda: tab not in subprocess.check_output([binary, "--list"], env=env, text=True), "tab cleanup")
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("tab-draft") == "retained", "per-tab draft preservation")
+        assert subprocess.check_output([binary, "--list"], env=env, text=True).split("\t")[-1] == before.split("\t")[-1]
         subprocess.run([binary, "--session", "composer", "--quit"], env=env, check=True, timeout=4)
         app.wait(timeout=5)
         logs.flush()
@@ -242,8 +270,10 @@ def worker(tmp):
         raise AssertionError(f"{error}; shell state {state()}") from error
     finally:
         if app.poll() is None:
-            subprocess.run([binary, "--session", "composer", "--quit"], env=env, timeout=4,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            listing = subprocess.run([binary, "--list"], env=env, timeout=4, capture_output=True, text=True)
+            for row in listing.stdout.splitlines():
+                subprocess.run([binary, "--session", row.split("\t")[0], "--quit"], env=env, timeout=4,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             app.wait(timeout=5)
         logs.close()
 
