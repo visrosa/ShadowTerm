@@ -7,6 +7,9 @@ int main (string[] args) {
         assert (!new VCom.CompletionContext ("echo 'a b", 9, true, "/tmp").simple);
         assert (!new VCom.CompletionContext ("echo $HOME", 10, true, "/tmp").simple);
         assert (!new VCom.CompletionContext ("echo a\\ b", 9, true, "/tmp").simple);
+        var quoted = new VCom.CompletionContext ("cat '日本 file-tail' rest", 12, true, "/tmp");
+        assert (!quoted.simple && quoted.literal && quoted.start == 4 && quoted.end == 18);
+        assert (!new VCom.CompletionContext ("echo (touch bad) ./fi", 21, true, "/tmp").query_safe);
     });
     Test.add_func ("/completion/local-files-and-fish-literals", () => {
         string? directory = null;

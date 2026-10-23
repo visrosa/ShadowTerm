@@ -10,34 +10,58 @@ namespace VCom {
         public int end { get; private set; }
         public string prefix { get; private set; default = ""; }
         public bool simple { get; private set; default = true; }
+        public bool literal { get; private set; default = true; }
+        public bool query_safe { get; private set; default = true; }
+        public string command_prefix { get; private set; default = ""; }
 
         public CompletionContext (string source, int cursor, bool fish, string directory) {
             this.source = source; this.cursor = cursor; this.fish = fish; this.directory = directory;
             end = cursor;
-            if (cursor < 0 || cursor > source.char_count () || source.length > 65536) { simple = false; return; }
+            if (cursor < 0 || cursor > source.char_count () || source.length > 65536) { simple = literal = query_safe = false; return; }
             unichar quote = 0;
             bool escaped = false;
+            bool comment = false;
             int byte_offset = 0;
+            int command_start = 0;
             for (int i = 0; i < cursor; i++) {
                 unichar c;
                 source.get_next_char (ref byte_offset, out c);
+                if (comment) {
+                    if (c == '\n') { comment = false; start = command_start = i + 1; simple = literal = true; }
+                    continue;
+                }
                 if (escaped) { escaped = false; continue; }
-                if (c == '\\') { escaped = true; simple = false; continue; }
-                if (quote != 0) { if (c == quote) quote = 0; continue; }
+                if (c == '\\' && (quote != '\'' || (byte_offset < source.length && (source[byte_offset] == '\'' || source[byte_offset] == '\\')))) { escaped = true; simple = false; continue; }
+                if (quote != 0) {
+                    if (c == quote) quote = 0;
+                    else if (quote == '"' && c == '(') query_safe = false;
+                    continue;
+                }
                 if (c == '\'' || c == '"') { quote = c; simple = false; continue; }
-                if (separator (c)) { start = i + 1; simple = true; }
-                else if ("$(){}[]*?`#".index_of_char (c) >= 0) simple = false;
+                if (c == '#' && i == start) { comment = true; simple = literal = false; continue; }
+                if (c == '(' || c == '`') query_safe = false;
+                if (separator (c)) {
+                    start = i + 1; simple = literal = true;
+                    if ("|;&\n".index_of_char (c) >= 0) command_start = i + 1;
+                }
+                else if ("$(){}[]*?`#".index_of_char (c) >= 0) simple = literal = false;
             }
+            if (escaped) literal = false;
             if (quote != 0 || escaped) simple = false;
             while (byte_offset < source.length) {
                 unichar c;
                 source.get_next_char (ref byte_offset, out c);
+                if (escaped) { escaped = false; end++; continue; }
+                if (c == '\\' && (quote != '\'' || (byte_offset < source.length && (source[byte_offset] == '\'' || source[byte_offset] == '\\')))) { escaped = true; simple = false; end++; continue; }
+                if (quote != 0) { if (c == quote) quote = 0; end++; continue; }
+                if (c == '\'' || c == '"') { quote = c; simple = false; end++; continue; }
                 if (separator (c)) break;
-                if ("\\\"'$(){}[]*?`#".index_of_char (c) >= 0) simple = false;
+                if ("$(){}[]*?`#".index_of_char (c) >= 0) simple = literal = false;
                 end++;
             }
             prefix = source.substring (source.index_of_nth_char (start),
                 source.index_of_nth_char (cursor) - source.index_of_nth_char (start));
+            command_prefix = source.substring (source.index_of_nth_char (command_start), source.index_of_nth_char (start) - source.index_of_nth_char (command_start));
         }
 
         private static bool separator (unichar c) {
@@ -51,6 +75,7 @@ namespace VCom {
         public string detail;
         public int start;
         public int end;
+        public int cursor = -1;
         public CompletionItem (CompletionContext context, string label, string insertion, string detail) {
             start = context.start; end = context.end;
             this.label = label; this.insertion = insertion; this.detail = detail;
@@ -59,6 +84,7 @@ namespace VCom {
 
     public abstract class CompletionProvider : Object {
         public abstract async CompletionItem[] complete (CompletionContext context, Cancellable cancel) throws Error;
+        public virtual CompletionItem? expand (CompletionContext context) { return null; }
     }
 
     public class BuiltinProvider : CompletionProvider {

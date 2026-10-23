@@ -18,6 +18,8 @@ public class RichInput : Gtk.TextView {
     public bool reveal_active_line { get; set; default = true; }
     public string working_directory { get; set; default = ""; }
     private bool restyling = false;
+    private RichSpan[] analysis = {};
+    private string analyzed_source = "";
     private Gtk.CssProvider font_css = new Gtk.CssProvider ();
 
     public RichInput () {
@@ -36,6 +38,9 @@ public class RichInput : Gtk.TextView {
         buffer.create_tag ("variable", "foreground", "#1c5eaa");
         buffer.create_tag ("comment", "style", Pango.Style.ITALIC);
         buffer.create_tag ("option", "underline", Pango.Underline.SINGLE);
+        buffer.create_tag ("command", "foreground", "#1c5eaa");
+        buffer.create_tag ("path", "underline", Pango.Underline.SINGLE);
+        buffer.create_tag ("diagnostic", "underline", Pango.Underline.ERROR, "underline-rgba", Gdk.RGBA () {red = 0.9f, green = 0.3f, blue = 0.3f, alpha = 1});
         buffer.changed.connect (restyle);
         // Revealing punctuation on the cursor's line makes delimiters editable
         // without deleting invisible characters by accident.
@@ -48,6 +53,7 @@ public class RichInput : Gtk.TextView {
         notify["dark"].connect (() => {
             buffer.tag_table.lookup ("string").foreground = dark ? "#8ff0a4" : "#25703c";
             buffer.tag_table.lookup ("variable").foreground = dark ? "#99c1f1" : "#1c5eaa";
+            buffer.tag_table.lookup ("command").foreground = dark ? "#99c1f1" : "#1c5eaa";
         });
         var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
         keys.key_pressed.connect ((key, code, state) => {
@@ -255,7 +261,21 @@ public class RichInput : Gtk.TextView {
             if (span.tag == "hidden" && (source_mode || (reveal_active_line && start.get_line () == active_line))) continue;
             buffer.apply_tag_by_name (span.tag, start, end);
         }
+        if (fish_mode && text == analyzed_source) {
+            foreach (var span in analysis) {
+                if (span.start < 0 || span.end < span.start || span.end > text.length) continue;
+                buffer.get_iter_at_offset (out start, text.char_count (span.start));
+                buffer.get_iter_at_offset (out end, text.char_count (span.end));
+                buffer.apply_tag_by_name (span.tag, start, end);
+            }
+        }
         monospace = source_mode || fish_mode;
         restyling = false;
+    }
+
+    public void set_analysis (string source, RichSpan[] spans) {
+        if (source != this.source ()) return;
+        analyzed_source = source; analysis = spans;
+        restyle ();
     }
 }

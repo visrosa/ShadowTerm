@@ -40,6 +40,25 @@ public class ComposerAssist : Object {
 
     public void add_provider (VCom.CompletionProvider provider) { providers += provider; }
 
+    public void set_provider (VCom.CompletionProvider provider) {
+        dismiss ();
+        providers = {provider};
+    }
+
+    public bool expand_abbreviation () {
+        if (!editor.editable || editor.buffer.has_selection) return false;
+        Gtk.TextIter cursor;
+        editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
+        var context = new VCom.CompletionContext (editor.source (), cursor.get_offset (), editor.fish_mode, editor.working_directory);
+        foreach (var provider in providers) {
+            var item = provider.expand (context);
+            if (item == null) continue;
+            snapshot = context; items = {item}; accept (0);
+            return true;
+        }
+        return false;
+    }
+
     public void dismiss () {
         generation++;
         if (pending != null) pending.cancel ();
@@ -52,18 +71,29 @@ public class ComposerAssist : Object {
         if (key == Gdk.Key.space && (state & Gdk.ModifierType.CONTROL_MASK) != 0) {
             request.begin (); return true;
         }
-        if (!visible) return false;
+        if (!visible) {
+            if (editor.fish_mode && key == Gdk.Key.Tab && (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SHIFT_MASK)) == 0) {
+                request.begin (true); return true;
+            }
+            if (key == Gdk.Key.space &&
+                (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SHIFT_MASK)) == 0 && !editor.buffer.has_selection) {
+                expand_abbreviation ();
+            }
+            return false;
+        }
         if (key == Gdk.Key.Escape) { dismiss (); return true; }
-        if (key == Gdk.Key.Return || key == Gdk.Key.Tab) {
+        if (key == Gdk.Key.Return || (key == Gdk.Key.Tab && (state & Gdk.ModifierType.SHIFT_MASK) == 0)) {
             var row = list.get_selected_row ();
             if (row != null) accept (row.get_index ());
             return true;
         }
-        if (key == Gdk.Key.Up || key == Gdk.Key.Down) {
+        if (key == Gdk.Key.Up || key == Gdk.Key.Down || key == Gdk.Key.Page_Up || key == Gdk.Key.Page_Down || key == Gdk.Key.ISO_Left_Tab ||
+            (key == Gdk.Key.Tab && (state & Gdk.ModifierType.SHIFT_MASK) != 0)) {
             if (items.length == 0) return true;
             var row = list.get_selected_row ();
             int index = row == null ? 0 : row.get_index ();
-            index = (index + (key == Gdk.Key.Down ? 1 : items.length - 1)) % items.length;
+            int step = key == Gdk.Key.Page_Down ? 5 : key == Gdk.Key.Page_Up ? -5 : key == Gdk.Key.Down ? 1 : -1;
+            index = int.max (0, int.min (items.length - 1, index + step));
             list.select_row (list.get_row_at_index (index));
             Graphene.Rect bounds;
             if (list.get_row_at_index (index).compute_bounds (list, out bounds)) {
@@ -78,7 +108,7 @@ public class ComposerAssist : Object {
         return false;
     }
 
-    public async void request () {
+    public async void request (bool insert_unique = false) {
         dismiss ();
         if (!editor.editable || editor.buffer.has_selection) return;
         Gtk.TextIter cursor;
@@ -119,6 +149,7 @@ public class ComposerAssist : Object {
         detail.label = items.length == 0 ? "No suggestions for this context" : "";
         if (items.length > 0) list.select_row (list.get_row_at_index (0));
         panel.reveal_child = true;
+        if (insert_unique && items.length == 1) accept (0);
     }
 
     private void accept (int index) {
@@ -129,6 +160,7 @@ public class ComposerAssist : Object {
             editor.fish_mode != snapshot.fish || editor.working_directory != snapshot.directory) { dismiss (); return; }
         var item = items[index];
         if (item.start < 0 || item.end < item.start || item.end > snapshot.source.char_count () ||
+            item.cursor > item.insertion.char_count () ||
             !item.insertion.validate () || item.insertion.length > 65536) { dismiss (); return; }
         dismiss ();
         Gtk.TextIter start, end;
@@ -137,6 +169,7 @@ public class ComposerAssist : Object {
         editor.buffer.begin_user_action ();
         editor.buffer.delete (ref start, ref end);
         editor.buffer.insert (ref start, item.insertion, -1);
+        if (item.cursor >= 0) editor.buffer.get_iter_at_offset (out start, item.start + item.cursor);
         editor.buffer.place_cursor (start);
         editor.buffer.end_user_action ();
         editor.grab_focus ();
