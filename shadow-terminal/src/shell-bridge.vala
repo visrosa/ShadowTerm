@@ -18,6 +18,12 @@ namespace Shadow {
             return window.composer_active ();
         }
 
+        public void metadata (string session, string token, int pid, string abbreviations, string completions, string paths, string functions) throws DBusError, IOError {
+            var window = host.shell_window (session, pid);
+            if (token != window.input_session.token) throw new IOError.PERMISSION_DENIED ("Expired shell identity");
+            window.shell_metadata (abbreviations, completions, paths, functions);
+        }
+
         public void report (string session, string token, int pid, string phase, string detail) throws DBusError, IOError {
             var window = host.shell_window (session, pid);
             window.input_session.report (token, phase, detail);

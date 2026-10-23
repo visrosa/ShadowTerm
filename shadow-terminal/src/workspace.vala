@@ -14,12 +14,14 @@ namespace Shadow {
         private bool placed = false;
         private bool was_active = false;
         private bool closing = false;
+        private string default_directory;
         private uint blur_idle = 0;
         public TerminalSession? active_session { get { return pages.visible_child as TerminalSession; } }
 
         public WorkspaceWindow (Host host, Request request) {
             Object (application: host);
             this.host = host;
+            default_directory = request.cwd;
             geometry_name = request.session;
             geometry = new Geometry (geometry_name);
             int width = request.width > 0 ? request.width : geometry.width;
@@ -34,7 +36,7 @@ namespace Shadow {
             add_css_class ("shadow-terminal");
             var header = new Gtk.HeaderBar ();
             header.add_css_class ("shadow-header");
-            var create = new Gtk.Button.from_icon_name ("tab-new-symbolic") {tooltip_text = "New Tab (Ctrl+Shift+T)"};
+            var create = new Gtk.Button.from_icon_name ("tab-new-symbolic") {tooltip_text = "New Tab (Ctrl+T)"};
             create.add_css_class ("header-action");
             create.clicked.connect (() => host.new_tab (this, active_session == null ? request.cwd : active_session.directory));
             header.pack_start (create);
@@ -70,6 +72,17 @@ namespace Shadow {
             });
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
+                if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK) {
+                    switch (Gdk.keyval_to_lower (key)) {
+                    case Gdk.Key.t:
+                        if (active_session != null) host.new_tab (this, active_session.directory);
+                        return true;
+                    case Gdk.Key.n: new_default_tab (); return true;
+                    case Gdk.Key.w:
+                        if (active_session != null) active_session.end_session ();
+                        return true;
+                    }
+                }
                 if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) ==
                     (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) {
                     switch (Gdk.keyval_to_lower (key)) {
@@ -108,6 +121,10 @@ namespace Shadow {
             var close = new Gtk.Button.from_icon_name ("window-close-symbolic") {has_frame = false, tooltip_text = "Close Tab"};
             close.clicked.connect (() => session.end_session ());
             row.append (select); row.append (close);
+            var middle = new Gtk.GestureClick () {button = 2, propagation_phase = Gtk.PropagationPhase.CAPTURE};
+            weak Gtk.GestureClick middle_click = middle;
+            middle.pressed.connect (() => { middle_click.set_state (Gtk.EventSequenceState.CLAIMED); session.end_session (); });
+            row.add_controller (middle);
             tabs.append (row); tab_widgets.insert (session, row);
             update_session (session);
         }
@@ -225,5 +242,7 @@ namespace Shadow {
         public void show_palette () {
             if (active_session != null) active_session.show_palette ();
         }
+
+        public void new_default_tab () { host.new_tab (this, default_directory); }
     }
 }

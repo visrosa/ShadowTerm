@@ -13,6 +13,15 @@ private Gtk.Widget? find_surface (Gtk.Widget widget) {
     return null;
 }
 
+private Gtk.Widget? find_css (Gtk.Widget widget, string name) {
+    if (widget.has_css_class (name)) return widget;
+    for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
+        var found = find_css (child, name);
+        if (found != null) return found;
+    }
+    return null;
+}
+
 private RichInput? find_editor (Gtk.Widget widget) {
     if (widget is RichInput) return (RichInput) widget;
     for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
@@ -52,6 +61,15 @@ private uint8 background_alpha (Gtk.Widget widget, Gtk.Window window) {
     var pixels = new uint8[image.get_width () * image.get_height () * 4];
     image.download (pixels, image.get_width () * 4);
     return pixels[((image.get_height () - 3) * image.get_width () + 3) * 4 + 3];
+}
+
+private bool same_pixels (Gdk.Texture first, Gdk.Texture second) {
+    if (first.get_width () != second.get_width () || first.get_height () != second.get_height ()) return false;
+    int size = first.get_width () * first.get_height () * 4;
+    var a = new uint8[size]; var b = new uint8[size];
+    first.download (a, first.get_width () * 4); second.download (b, second.get_width () * 4);
+    for (int i = 0; i < size; i++) if (a[i] != b[i]) return false;
+    return true;
 }
 
 int main (string[] args) {
@@ -107,7 +125,15 @@ int main (string[] args) {
             editor.buffer.text = "preserved draft";
             session.input_session.report (session.input_session.token, "busy", "");
             settle ();
-            assert (!surface.get_mapped ());
+            assert (surface.get_mapped ());
+            if (Shadow.PRIVATE_VTE) {
+                session.terminal.feed ("\x1b[?1049h".data);
+                settle ();
+                assert (!surface.get_mapped ());
+                session.terminal.feed ("\x1b[?1049l".data);
+                settle ();
+                assert (surface.get_mapped ());
+            }
             session.input_session.report (session.input_session.token, "ready", "");
             settle ();
             assert (surface.get_mapped () && editor.source () == "preserved draft");
@@ -161,15 +187,133 @@ int main (string[] args) {
             settle ();
             assert (!surface.has_css_class ("inherit-pane-style"));
             assert (background_alpha (surface, window) == 255);
-            assert (background_alpha (window.titlebar, window) >= 126 && background_alpha (window.titlebar, window) <= 129);
+            assert (background_alpha (window.titlebar, window) == 255);
+            assert (!window.titlebar.get_color ().equal (expected));
             window.set_default_size (420, 420);
             settle ();
             assert (window.get_width () <= 440);
             assert (texture (window, window).save_to_png ("/tmp/shadow-term-ui-narrow.png"));
+            var history = new StringBuilder ();
+            for (int line = 0; line < 100; line++) history.append_printf ("\r\nHistory line %d", line);
+            session.terminal.feed (history.str.data);
+            settle ();
+            var adjustment = session.terminal.vadjustment;
+            adjustment.value = adjustment.upper - adjustment.page_size;
+            settle ();
+            double bottom = adjustment.value;
+            editor.grab_focus ();
+            run_private ({"xdotool", "windowfocus", "--sync", wid, "key", "Page_Up"});
+            settle ();
+            assert (adjustment.value < bottom && editor.source () == "");
+            run_private ({"xdotool", "key", "Page_Down"});
+            settle ();
+            assert (adjustment.value == bottom && editor.source () == "");
             session.running = false;
-            session.end_session ();
+            var second_request = Shadow.Request.parse ({"shadow-term", "--session", "middle-close-test"});
+            var second = new Shadow.TerminalSession (host, window, second_request, Environ.get ());
+            window.add_session (second); window.present_session (second);
+            settle ();
+            var first_tab = find_css (window.titlebar, "workspace-tab");
+            point.x = first_tab.get_width () / 2.0f; point.y = first_tab.get_height () / 2.0f;
+            assert (first_tab.compute_point (window, point, out target));
+            run_private ({"xdotool", "mousemove", "--window", wid, ((int) target.x).to_string (), ((int) target.y).to_string (), "click", "2"});
+            settle ();
+            assert (session.closing && window.active_session == second && !second.closing);
+            second.end_session ();
             // This test has its own process and private XDG configuration.
             host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
+    Test.add_func ("/presentation/live-analysis-paths-syntax-and-stale-drafts", () => {
+        string? directory = null;
+        try {
+            directory = DirUtils.make_tmp ("vcom-analysis-XXXXXX");
+            string existing = Path.build_filename (directory, "日本 existing.txt");
+            FileUtils.set_contents (existing, "fixture");
+            var editor = new RichInput () {fish_mode = true, working_directory = directory};
+            var analysis = new Shadow.FishAnalysis (editor);
+            var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            body.append (editor); body.append (analysis.status);
+            var window = new Gtk.Window () {child = body};
+            window.present ();
+            editor.buffer.text = "cat '日本 existing.txt'";
+            for (int i = 0; i < 6; i++) settle ();
+            assert (!analysis.status.visible);
+            Gtk.TextIter iter;
+            editor.buffer.get_iter_at_offset (out iter, 6);
+            assert (iter.has_tag (editor.buffer.tag_table.lookup ("path")));
+            assert (editor.source () == "cat '日本 existing.txt'");
+            editor.buffer.text = "cat missing.txt";
+            for (int i = 0; i < 6; i++) settle ();
+            assert (analysis.status.visible && analysis.status.label.contains ("does not exist"));
+            editor.buffer.get_iter_at_offset (out iter, 6);
+            assert (iter.has_tag (editor.buffer.tag_table.lookup ("diagnostic")));
+            editor.buffer.text = "printf hello > new-output.txt";
+            for (int i = 0; i < 6; i++) settle ();
+            assert (!analysis.status.visible);
+            assert (!FileUtils.test (Path.build_filename (directory, "new-output.txt"), FileTest.EXISTS));
+            editor.buffer.text = "echo (";
+            for (int i = 0; i < 6; i++) settle ();
+            assert (analysis.status.visible && analysis.status.label == "Check fish syntax");
+            editor.buffer.text = "cat missing.txt";
+            settle ();
+            editor.buffer.text = "echo retained";
+            for (int i = 0; i < 6; i++) settle ();
+            assert (!analysis.status.visible && editor.source () == "echo retained");
+            editor.buffer.text = "cat '日本 existing.txt'";
+            editor.working_directory = Path.build_filename (directory, "other");
+            DirUtils.create (editor.working_directory, 0700);
+            for (int i = 0; i < 6; i++) settle ();
+            assert (analysis.status.visible && analysis.status.label.contains ("does not exist"));
+            analysis.cancel ();
+            window.destroy ();
+            DirUtils.remove (editor.working_directory);
+            FileUtils.unlink (existing);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+        if (directory != null) DirUtils.remove (directory);
+    });
+    Test.add_func ("/presentation/private-vte-hover-links-and-cursor", () => {
+        if (!Shadow.PRIVATE_VTE) { Test.skip ("Private VTE presentation hooks are not configured"); return; }
+        try {
+            var terminal = new Vte.Terminal ();
+            terminal.set_allow_hyperlink (true);
+            terminal.add_css_class ("shadow-hover-links");
+            terminal.add_css_class ("shadow-composer-cursor");
+            terminal.set_cursor_blink_mode (Vte.CursorBlinkMode.OFF);
+            Gdk.RGBA fg = {}, bg = {};
+            fg.parse ("#ddeeff"); bg.parse ("rgba(18,52,86,0.5)");
+            terminal.set_colors (fg, bg, null);
+            var window = new Gtk.Window () {title = "Private VTE hooks", child = terminal, default_width = 500, default_height = 260};
+            window.present (); terminal.grab_focus ();
+            settle ();
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Private VTE hooks$"});
+            run_private ({"xdotool", "mousemove", "--window", wid, "480", "240"});
+            terminal.feed ("\x1b[2J\x1b[Hdirectory\r\n".data);
+            settle ();
+            var plain = texture (terminal, window);
+            terminal.feed ("\x1b[2J\x1b[H\x1b]8;;file:///tmp\x1b\\directory\x1b]8;;\x1b\\\r\n".data);
+            settle ();
+            var linked = texture (terminal, window);
+            assert (same_pixels (plain, linked));
+            var padding = terminal.get_style_context ().get_padding ();
+            int x = padding.left + (int) terminal.get_char_width () * 2;
+            int y = padding.top + (int) terminal.get_char_height () / 2;
+            run_private ({"xdotool", "mousemove", "--window", wid, x.to_string (), y.to_string ()});
+            settle ();
+            assert (terminal.hyperlink_hover_uri == "file:///tmp");
+            assert (!same_pixels (linked, texture (terminal, window)));
+            run_private ({"xdotool", "mousemove", "--window", wid, "480", "240"});
+            settle ();
+            assert (same_pixels (linked, texture (terminal, window)));
+            terminal.feed ("\x1b[?25l".data);
+            settle ();
+            assert (same_pixels (linked, texture (terminal, window)));
+            terminal.feed ("\x1b[?25h".data);
+            terminal.remove_css_class ("shadow-composer-cursor");
+            terminal.queue_draw ();
+            settle ();
+            assert (!same_pixels (linked, texture (terminal, window)));
+            window.destroy ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
     return Test.run ();

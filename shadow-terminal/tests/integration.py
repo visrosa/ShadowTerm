@@ -83,7 +83,7 @@ def worker(tmp):
     try:
         subprocess.run([str(ROOT / "build/editor-test")], env=env, check=True, timeout=5)
         subprocess.run([str(ROOT / "build/appearance-test")], env=env, check=True, timeout=5)
-        subprocess.run([str(ROOT / "build/presentation-test")], env=env, check=True, timeout=8)
+        subprocess.run([str(ROOT / "build/presentation-test")], env=env, check=True, timeout=12)
         launch("--input", "terminal", "--cwd", str(tmp), "--size", "900x620")
         wait_for(lambda: window("default"), "initial terminal window")
         pid = wait_for(lambda: sessions().get("default", (None, 0))[1], "default shell PID")
@@ -256,7 +256,7 @@ def main():
         if os.environ.get("SHADOW_TERM_PRIVATE_TEST") != "1":
             raise SystemExit("Workers must be launched by the private-display harness")
         if args.presentation:
-            subprocess.run([str(ROOT / "build/presentation-test")], check=True, timeout=8)
+            subprocess.run([str(ROOT / "build/presentation-test")], check=True, timeout=12)
         elif args.frontend:
             import runpy
             runpy.run_path(str(Path(__file__).with_name("fish-frontend.py")))["worker"](args.worker)
@@ -267,7 +267,7 @@ def main():
     clean_env = os.environ.copy()
     clean_env.pop("DISPLAY", None)
     clean_env.pop("WAYLAND_DISPLAY", None)
-    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.5"
+    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.6"
     assert subprocess.run([str(BINARY), "--size", "3x4"], env=clean_env, capture_output=True).returncode == 2
     with tempfile.TemporaryDirectory(prefix="shadow-term-test-") as directory:
         tmp = Path(directory)

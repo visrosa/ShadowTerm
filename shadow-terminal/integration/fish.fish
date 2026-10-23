@@ -48,6 +48,7 @@ end
 
 function __vcom_prompt --on-event fish_prompt
     set --local previous_status $status
+    command "$SHADOW_TERM_HELPER" metadata "$(abbr --show)" "$(complete)" "$(string join : -- $fish_complete_path)" "$(string join : -- $fish_function_path)" 2>/dev/null
     if not command "$SHADOW_TERM_HELPER" ready 2>/dev/null
         # A disconnected host must not leave a usable native shell promptless.
         set --erase __vcom_prompt_hidden

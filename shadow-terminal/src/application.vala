@@ -33,8 +33,13 @@ namespace Shadow {
         private string last_source = "";
         private bool enter_submission = false;
         private bool previous_ready = false;
+        private bool alternate_screen = false;
+        private bool alternate_composer_override = false;
+        private bool adjusting_composer_toggle = false;
         private string shell_cwd;
         private ComposerAssist assistance;
+        private FishProvider fish_provider = new FishProvider ();
+        private FishAnalysis analysis;
         private Gtk.Revealer search;
         private Gtk.SearchEntry search_entry;
         private Gtk.DropDown search_target;
@@ -77,6 +82,7 @@ namespace Shadow {
             terminal.set_scrollback_lines (10000);
             terminal.set_audible_bell (false);
             terminal.set_allow_hyperlink (true);
+            terminal.add_css_class ("shadow-hover-links");
             terminal.set_scroll_on_keystroke (true);
             terminal.set_scroll_on_output (false);
             var scroll = new Gtk.ScrolledWindow () {child = terminal, vexpand = true};
@@ -87,6 +93,9 @@ namespace Shadow {
             editor.fish_mode = shell_editor;
             editor.working_directory = shell_cwd;
             assistance = new ComposerAssist (editor);
+            if (shell_editor) assistance.set_provider (fish_provider);
+            analysis = new FishAnalysis (editor) {enabled = false};
+            fish_provider.enabled = false;
             desktop_settings = Granite.Settings.get_default ();
             theme_handler = desktop_settings.notify["prefers-color-scheme"].connect (update_colors);
 
@@ -108,10 +117,44 @@ namespace Shadow {
             append (root);
             apply_preferences ();
             preferences_handler = host.preferences.changed.connect (apply_preferences);
+            if (PRIVATE_VTE) terminal.notify["shadow-alternate-screen"].connect (() => {
+                terminal.get ("shadow-alternate-screen", out alternate_screen);
+                alternate_composer_override = false;
+                update_composer_visibility ();
+                if (alternate_screen && editor.has_focus) terminal.grab_focus ();
+            });
+            editor.notify["has-focus"].connect (update_terminal_cursor);
 
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
                 if (editor.has_focus && assistance.handle_key (key, state)) return true;
+                if (editor.has_focus && key == Gdk.Key.Return &&
+                    (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK &&
+                    !input_session.pending && (!shell_editor || !input_session.ready)) { paste_draft (); return true; }
+                if (editor.has_focus && (key == Gdk.Key.Page_Up || key == Gdk.Key.Page_Down) &&
+                    (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) == 0) {
+                    var adjustment = terminal.vadjustment;
+                    adjustment.value += (key == Gdk.Key.Page_Up ? -1 : 1) * adjustment.page_increment;
+                    return true;
+                }
+                if (shell_editor && editor.has_focus && input_session.ready &&
+                    (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK) {
+                    uint lower = Gdk.keyval_to_lower (key);
+                    if (lower == Gdk.Key.l && !input_session.pending) { terminal.feed_child ("\x0c".data); return true; }
+                    if (lower == Gdk.Key.c && !editor.buffer.has_selection) {
+                        if (input_session.pending) input_session.reject ("Submission cancelled; draft retained");
+                        else {
+                            Gtk.TextIter start, end;
+                            editor.buffer.get_bounds (out start, out end);
+                            editor.buffer.begin_user_action ();
+                            editor.buffer.delete (ref start, ref end);
+                            editor.buffer.end_user_action ();
+                            terminal.feed_child ("\x03".data);
+                        }
+                        return true;
+                    }
+                    if (lower == Gdk.Key.d && editor.source () == "" && !input_session.pending) { terminal.feed_child ("\x04".data); return true; }
+                }
                 if (key == Gdk.Key.F1 && editor.has_focus) { show_shortcuts (); return true; }
                 if ((state & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.comma) {
                     show_preferences (); return true;
@@ -221,7 +264,8 @@ namespace Shadow {
             menu.add_css_class ("header-action");
             var popover = new Gtk.Popover ();
             var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 2) {margin_start = 6, margin_end = 6, margin_top = 6, margin_bottom = 6};
-            menu_item (box, popover, "New Tab", "Ctrl+Shift+T", () => host.new_tab (window, shell_cwd));
+            menu_item (box, popover, "New Tab", "Ctrl+T", () => host.new_tab (window, shell_cwd));
+            menu_item (box, popover, "New Tab in Default Directory", "Ctrl+N", () => window.new_default_tab ());
             menu_item (box, popover, "New Window", "Ctrl+Shift+N", () => host.new_terminal (shell_cwd));
             menu_item (box, popover, "Command Palette…", "Ctrl+Shift+P", show_palette);
             menu_item (box, popover, "Find in Terminal", "Ctrl+Shift+F", () => open_search (false));
@@ -236,7 +280,7 @@ namespace Shadow {
             menu_item (box, popover, "Keyboard Shortcuts", "F1", show_shortcuts);
             box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
             menu_item (box, popover, "Hide Window", "Ctrl+Shift+H", hide_session);
-            menu_item (box, popover, "Close Tab", "Ctrl+Shift+W", end_session);
+            menu_item (box, popover, "Close Tab", "Ctrl+W", end_session);
             menu_item (box, popover, "Close Window", "Ctrl+Shift+Q", () => window.close_workspace ());
             popover.child = box; menu.popover = popover;
             return menu;
@@ -276,7 +320,10 @@ namespace Shadow {
                 visible = false, sensitive = false, tooltip_text = "Run Command (Enter; Shift+Enter adds a line)", valign = Gtk.Align.CENTER};
             submit_button.add_css_class ("suggested-action");
             submit_button.add_css_class ("circular");
-            submit_button.clicked.connect (() => submit_command (false));
+            submit_button.clicked.connect (() => {
+                if (shell_editor && input_session.ready) submit_command (false);
+                else paste_draft ();
+            });
             var options = new Gtk.MenuButton () {icon_name = "view-more-symbolic", tooltip_text = "Composer Options",
                 valign = Gtk.Align.CENTER, margin_start = 4, margin_end = 10, has_frame = false};
             var popover = new Gtk.Popover ();
@@ -310,6 +357,9 @@ namespace Shadow {
             row.append (cancel_button); row.append (submit_button); row.append (options);
             compose_box.append (row);
             compose_box.append (assistance.panel);
+            analysis.status.margin_start = 42;
+            analysis.status.margin_end = 14;
+            compose_box.append (analysis.status);
             var context = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12) {margin_start = 42, margin_end = 14, margin_bottom = 10};
             context.add_css_class ("composer-context");
             directory_label = new Gtk.Label (compact_directory (shell_cwd)) {
@@ -327,6 +377,15 @@ namespace Shadow {
             composer = new Gtk.Revealer () {child = compose_box, transition_duration = 0};
             composer.reveal_child = compose_button.active;
             compose_button.toggled.connect (() => {
+                if (adjusting_composer_toggle) return;
+                if (alternate_screen && !alternate_composer_override && !compose_button.active) {
+                    // An enabled but automatically hidden editor should appear
+                    // on the first explicit toggle, without a disable/enable pair.
+                    alternate_composer_override = true;
+                    adjusting_composer_toggle = true;
+                    compose_button.active = true;
+                    adjusting_composer_toggle = false;
+                } else if (alternate_screen) alternate_composer_override = compose_button.active;
                 update_composer_visibility ();
                 presentation_dirty = true;
                 sync_presentation ();
@@ -344,9 +403,9 @@ namespace Shadow {
                 var grid = new Gtk.Grid () {column_spacing = 36, row_spacing = 10};
                 string[] actions = {"Run command / New line", "Run without adding a line", "Suggestions", "Composer / Native input",
                     "Recall last input", "Find in Composer / Terminal", "Copy / Paste terminal text", "Paste Composer source into terminal",
-                    "New tab / New window", "Close tab / Close window", "Previous / Next tab", "Command palette", "Hide window", "Preferences", "Bold / Italic / Code (Markdown)", "Zoom in / Out / Reset"};
+                    "New tab / Tab in default directory", "New window", "Close tab / Close window", "Previous / Next tab", "Command palette", "Hide window", "Preferences", "Bold / Italic / Code (Markdown)", "Zoom in / Out / Reset"};
                 string[] shortcuts = {"Enter / Shift+Enter", "Ctrl+Enter", "Ctrl+Space", "Ctrl+Shift+M", "Ctrl+Shift+L",
-                    "Ctrl+F / Ctrl+Shift+F", "Ctrl+Shift+C / V", "Ctrl+Shift+Enter", "Ctrl+Shift+T / N", "Ctrl+Shift+W / Q",
+                    "Ctrl+F / Ctrl+Shift+F", "Ctrl+Shift+C / V", "Ctrl+Shift+Enter", "Ctrl+T / N", "Ctrl+Shift+N", "Ctrl+W / Ctrl+Shift+Q",
                     "Ctrl+Page Up / Down", "Ctrl+Shift+P", "Ctrl+Shift+H",
                     "Ctrl+,", "Ctrl+B / I / `", "Ctrl+Shift+Plus / Minus / 0"};
                 for (int i = 0; i < actions.length; i++) {
@@ -376,13 +435,19 @@ namespace Shadow {
 
         private void refresh_input () {
             update_composer_visibility ();
-            submit_button.sensitive = shell_editor && running && input_session.ready && !input_session.pending && editor.source () != "";
-            submit_button.visible = shell_editor && editor.source () != "" && !input_session.pending;
+            bool command_input = shell_editor && input_session.ready;
+            fish_provider.enabled = command_input;
+            if (analysis.enabled != command_input) analysis.enabled = command_input;
+            submit_button.sensitive = running && !input_session.pending && editor.source () != "";
+            submit_button.visible = editor.source () != "" && !input_session.pending;
+            submit_button.icon_name = command_input ? "go-up-symbolic" : "edit-paste-symbolic";
+            submit_button.tooltip_text = command_input ? "Run Command (Enter; Shift+Enter adds a line)" : "Paste into Program (Ctrl+Enter; Enter adds a line)";
             cancel_button.visible = input_session.pending;
             recall_button.sensitive = last_source != "" && editor.source () == "";
             bool became_ready = input_session.ready && !previous_ready;
             bool became_busy = !input_session.ready && previous_ready;
             previous_ready = input_session.ready;
+            if (became_ready || became_busy) assistance.dismiss ();
             sync_presentation ();
             if (shell_editor) {
                 if (running) feedback_bar.visible = input_session.pending;
@@ -395,9 +460,32 @@ namespace Shadow {
         }
 
         private void update_composer_visibility () {
-            // A foreground program owns input even if it never switches to an
-            // alternate screen. Preserve the draft while reclaiming its space.
-            composer.reveal_child = compose_button.active && (!shell_editor || !running || input_session.ready);
+            // Screen state comes from VTE itself. Ordinary foreground readers
+            // can still consume explicitly pasted Composer source.
+            composer.reveal_child = compose_button.active && (!alternate_screen || alternate_composer_override);
+            update_terminal_cursor ();
+        }
+
+        private void update_terminal_cursor () {
+            // VTE has no host cursor-visibility API. At the empty suppressed
+            // prompt, matching its colours hides the idle outline without
+            // injecting terminal control sequences or changing emulator state.
+            bool hidden = composer.reveal_child && (input_session.ready || editor.has_focus);
+            if (hidden) terminal.add_css_class ("shadow-composer-cursor");
+            else terminal.remove_css_class ("shadow-composer-cursor");
+            terminal.queue_draw ();
+            if (PRIVATE_VTE) return;
+            bool dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+            Gdk.RGBA background = host.preferences.pane_background (dark);
+            Gdk.RGBA foreground = host.preferences.pane_foreground (dark);
+            if (hidden) {
+                terminal.set_color_cursor (background);
+                terminal.set_color_cursor_foreground (foreground);
+            } else {
+                terminal.set_color_cursor (null);
+                terminal.set_color_cursor_foreground (null);
+            }
+            terminal.set_cursor_blink_mode (hidden ? Vte.CursorBlinkMode.OFF : Vte.CursorBlinkMode.SYSTEM);
         }
 
         public bool composer_active () {
@@ -413,6 +501,7 @@ namespace Shadow {
 
         private void submit_command (bool from_enter) {
             if (!shell_editor || !running || !input_session.ready || input_session.pending || editor.source () == "") return;
+            assistance.expand_abbreviation ();
             try {
                 submitted_source = editor.source ();
                 enter_submission = from_enter;
@@ -431,6 +520,11 @@ namespace Shadow {
             directory_label.tooltip_text = directory;
             repository.refresh.begin (directory);
             refresh_input ();
+        }
+
+        public void shell_metadata (string abbreviations, string completions, string paths, string functions) {
+            assistance.dismiss ();
+            fish_provider.configure (abbreviations, completions, paths, functions);
         }
 
         private Gtk.Revealer create_search () {
@@ -520,6 +614,7 @@ namespace Shadow {
             editor.dark = editor_dark;
             if (preview != null) preview.dark = dark;
             terminal.set_colors (foreground, background, null);
+            update_terminal_cursor ();
             if (compose_box != null) {
                 if (host.preferences.inherit_style) compose_box.add_css_class ("inherit-pane-style");
                 else compose_box.remove_css_class ("inherit-pane-style");
@@ -611,6 +706,7 @@ namespace Shadow {
             window.session_closing (this);
             assistance.dismiss ();
             repository.cancel ();
+            analysis.cancel ();
             input_session.reset ();
             visible = false;
             if (spawning) spawn_cancel.cancel ();
@@ -620,6 +716,7 @@ namespace Shadow {
 
         private void finish () {
             repository.cancel ();
+            analysis.cancel ();
             terminal_context.close ();
             if (theme_handler != 0) { desktop_settings.disconnect (theme_handler); theme_handler = 0; }
             if (shortcuts_window != null) { shortcuts_window.destroy (); shortcuts_window = null; }
@@ -665,8 +762,9 @@ namespace Shadow {
         private void update_style () {
             bool dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
             string foreground = preferences.pane_foreground (dark).to_string ();
+            string header_foreground = preferences.inherit_style ? foreground : "@theme_fg_color";
             string background = preferences.pane_background (dark).to_string ();
-            string header_background = preferences.header_background (dark).to_string ();
+            string header_background = preferences.inherit_style ? preferences.header_background (dark).to_string () : "@theme_bg_color";
             appearance_css.load_from_string ("""
                 window.shadow-terminal { background-color: transparent; }
                 vte-terminal { padding: 10px 14px; }
@@ -688,7 +786,7 @@ namespace Shadow {
                 .shadow-composer.inherit-pane-style { background-color: %s; color: %s; }
                 .shadow-composer.inherit-pane-style textview.composer-input,
                 .shadow-composer.inherit-pane-style textview.composer-input text { color: %s; caret-color: %s; }
-            """.printf (header_background, foreground, foreground, background, foreground, foreground, foreground));
+            """.printf (header_background, header_foreground, header_foreground, background, foreground, foreground, foreground));
         }
 
         public TerminalSession shell_window (string session, int pid) throws IOError {
@@ -779,7 +877,7 @@ int main (string[] args) {
         stdout.printf ("Shadow Term %s\n", Shadow.VERSION); return 0;
     }
     if (args.length == 2 && (args[1] == "--help" || args[1] == "-h")) {
-        stdout.printf ("""Shadow Term 0.0.5 — interactive shell and command windows
+        stdout.printf ("""Shadow Term 0.0.6 — interactive shell and command windows
 Usage: shadow-term [OPTIONS] [-- COMMAND ARG...]
   --session NAME           Named session (default: default)
   --cwd DIRECTORY          Initial working directory (default: invoking directory)

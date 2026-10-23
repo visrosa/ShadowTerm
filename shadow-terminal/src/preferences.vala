@@ -127,7 +127,7 @@ namespace Shadow {
             opacity.set_value (settings.opacity * 100);
             lines = new Gtk.SpinButton.with_range (100, 100000, 1000) {value = settings.scrollback};
             inherit_style = new Gtk.Switch () {active = settings.inherit_style, halign = Gtk.Align.START,
-                tooltip_text = "Apply Pane colors and background opacity to Composer"};
+                tooltip_text = "Apply Pane colors and background opacity to Composer and the headerbar"};
             system_colors = new Gtk.Switch () {active = settings.system_colors, halign = Gtk.Align.START};
             Gdk.RGBA fg = {}, bg = {};
             fg.parse (settings.foreground); bg.parse (settings.background);
@@ -138,6 +138,7 @@ namespace Shadow {
             header_boost = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, 100, 1) {
                 draw_value = true, digits = 0, hexpand = true, tooltip_text = "0% matches Pane opacity; 100% keeps the header opaque"};
             header_boost.set_value (settings.header_opacity_boost * 100);
+            header_boost.sensitive = settings.inherit_style;
             status = new Gtk.Label ("") {xalign = 0, wrap = true};
             Gtk.Widget[] controls = {terminal, editor, opacity, lines, inherit_style, system_colors, foreground, background, header_boost};
             string[] labels = {"Terminal font", "Composer font", "Background opacity (%)", "Scrollback lines",
@@ -156,7 +157,10 @@ namespace Shadow {
             editor.notify["font-desc"].connect (schedule_apply);
             opacity.value_changed.connect (schedule_apply);
             lines.value_changed.connect (schedule_apply);
-            inherit_style.notify["active"].connect (schedule_apply);
+            inherit_style.notify["active"].connect (() => {
+                header_boost.sensitive = inherit_style.active;
+                schedule_apply ();
+            });
             system_colors.notify["active"].connect (() => {
                 foreground.sensitive = background.sensitive = !system_colors.active;
                 schedule_apply ();

@@ -14,13 +14,16 @@ int main(int argc, char **argv) {
     if (!bus) goto failed;
     gboolean take = strcmp(argv[1], "take") == 0;
     gboolean presentation = strcmp(argv[1], "presentation") == 0;
+    gboolean metadata = strcmp(argv[1], "metadata") == 0;
+    if (metadata && argc != 6) { g_object_unref(bus); return 2; }
     char *cwd = g_get_current_dir();
     const char *detail = argc > 2 ? argv[2] : (strcmp(argv[1], "ready") == 0 ? cwd : "");
-    GVariant *parameters = (take || presentation) ? g_variant_new("(ssi)", session, token, (gint) getppid()) :
+    GVariant *parameters = metadata ? g_variant_new("(ssissss)", session, token, (gint) getppid(), argv[2], argv[3], argv[4], argv[5]) :
+        (take || presentation) ? g_variant_new("(ssi)", session, token, (gint) getppid()) :
         g_variant_new("(ssiss)", session, token, (gint) getppid(), argv[1], detail);
     GVariant *reply = g_dbus_connection_call_sync(bus,
         "io.github.visrosa.Vibrant.ShadowTerm", "/io/github/visrosa/Vibrant/Shell",
-        "io.github.visrosa.Vibrant.Shell1", take ? "TakeInput" : presentation ? "GetPresentation" : "Report", parameters,
+        "io.github.visrosa.Vibrant.Shell1", metadata ? "Metadata" : take ? "TakeInput" : presentation ? "GetPresentation" : "Report", parameters,
         take ? G_VARIANT_TYPE("(s)") : presentation ? G_VARIANT_TYPE("(b)") : G_VARIANT_TYPE("()"),
         G_DBUS_CALL_FLAGS_NONE, 1500, NULL, &error);
     g_free(cwd);
