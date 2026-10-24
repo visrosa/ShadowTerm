@@ -86,6 +86,57 @@ def worker(tmp):
         time.sleep(0.15)
         command(f"printf '%s' $status > {tmp}/prior-status", "prior-status")
         assert read("prior-status") == "1", read("prior-status")
+        # Record only the prompt fields while exec preserves the helper's real
+        # parent-shell authentication. All files and state stay in this fixture.
+        recorder = tmp / "context-recorder.py"
+        recorder.write_text(f"#!{sys.executable}\n" +
+                            "import json, os, sys\n" +
+                            "from pathlib import Path\n" +
+                            f"path = Path({str(tmp / 'prompt-context.json')!r})\n" +
+                            "if sys.argv[1] == 'context':\n" +
+                            " path.with_suffix('.pending').write_text(json.dumps(sys.argv[2:]))\n" +
+                            " os.replace(path.with_suffix('.pending'), path)\n" +
+                            f"os.execv({str(harness.ROOT / 'build/vcom-shell')!r}, ['vcom-shell', *sys.argv[1:]])\n")
+        recorder.chmod(0o700)
+
+        def prompt_fields():
+            path = tmp / "prompt-context.json"
+            return json.loads(path.read_text()) if path.exists() else None
+
+        environment_fixture = tmp / "context-env.fish"
+        environment_fixture.write_text(f"set -gx VIRTUAL_ENV '{tmp}/日本語'\n"
+                                       "set -gx CONDA_DEFAULT_ENV science\nset -gx SSH_TTY fixture\n")
+        command(f"set -g __vcom_test_helper $SHADOW_TERM_HELPER; set -gx SHADOW_TERM_HELPER {recorder}; "
+                f"source {environment_fixture}; "
+                f"printf configured > {tmp}/context-ready", "context-ready")
+        fields = harness.wait_for(lambda: prompt_fields(), "live prompt context snapshot")
+        harness.wait_for(lambda: "ready" in state(), "ready after context snapshot")
+        assert fields[0] == "1" and fields[1] == "0" and fields[4] == f"{tmp}/日本語"
+        assert fields[5] == "science" and fields[6] == "1" and fields[8] and fields[9], fields
+        command(f'command "$SHADOW_TERM_HELPER" context 1 0 0 100 "" "" 0 0 fixture host; '
+                f"printf '%s' $status > {tmp}/context-bridge-ack", "context-bridge-ack")
+        assert read("context-bridge-ack") == "0", "Real prompt helper must accept the authenticated context method"
+        text("false | true")
+        xdo("key", "Return")
+        harness.wait_for(lambda: (prompt_fields() or [None] * 10)[2] == "1,0", "pipeline statuses captured before helpers")
+        harness.wait_for(lambda: "ready" in state(), "ready after pipeline snapshot")
+        assert prompt_fields()[1] == "0"
+        xdo("key", "ctrl+shift+m")
+        time.sleep(0.12)
+        xdo("key", "ctrl+shift+m")
+        time.sleep(0.12)
+        assert prompt_fields()[2] == "1,0", "Prompt redraw must retain the last command's pipeline"
+        text("sleep 1.1")
+        xdo("key", "Return")
+        harness.wait_for(lambda: int((prompt_fields() or [None, None, None, "0"])[3]) >= 1000, "command duration")
+        harness.wait_for(lambda: "ready" in state(), "ready after duration snapshot")
+        text("sleep 30 &")
+        xdo("key", "Return")
+        harness.wait_for(lambda: (prompt_fields() or [None] * 10)[7] == "1", "background job count")
+        harness.wait_for(lambda: "ready" in state(), "ready after jobs snapshot")
+        command(f"kill $last_pid; set -e VIRTUAL_ENV CONDA_DEFAULT_ENV SSH_TTY; printf cleared > {tmp}/context-cleared", "context-cleared")
+        harness.wait_for(lambda: prompt_fields()[4:8] == ["", "", "0", "0"], "deactivated environments and completed job")
+        command(f"set -gx SHADOW_TERM_HELPER $__vcom_test_helper; printf restored > {tmp}/context-helper-restored", "context-helper-restored")
         # Composer queries live completion definitions without invoking native input.
         command(f"complete -c printf -f -a 'vcomtag' ; abbr -a vcomsay printf; printf configured > {tmp}/services-ready", "services-ready")
         text("printf vcomt")

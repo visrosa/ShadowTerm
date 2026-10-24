@@ -29,6 +29,16 @@ int main (string[] args) {
             font.font_desc = Pango.FontDescription.from_string ("Monospace 16");
             editor.font_desc = Pango.FontDescription.from_string ("Sans Italic 14");
             opacity.set_value (70); lines.value = 17000;
+            var context = (Gtk.Expander) grid.get_child_at (0, 10);
+            context.expanded = true;
+            var options = context.child;
+            var master = (Gtk.CheckButton) options.get_first_child ();
+            var directory_toggle = (Gtk.CheckButton) master.get_next_sibling ();
+            var git_toggle = (Gtk.CheckButton) directory_toggle.get_next_sibling ();
+            master.active = false;
+            assert (!git_toggle.sensitive && !settings.context_visible ("enabled"));
+            master.active = true;
+            git_toggle.active = false;
             // Closing must flush the coalesced write even before its timer fires.
             dialog.close ();
             var loop = new MainLoop ();
@@ -39,6 +49,7 @@ int main (string[] args) {
             assert (loaded.opacity == 0.7 && loaded.scrollback == 17000);
             assert (!loaded.inherit_style && !loaded.system_colors);
             assert (loaded.header_opacity_boost == 0.5);
+            assert (loaded.context_visible ("enabled") && !loaded.context_visible ("git"));
             assert (loaded.foreground == fg.to_string () && loaded.background == bg.to_string ());
             parent.destroy ();
             FileUtils.unlink (filename);

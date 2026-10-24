@@ -4,6 +4,15 @@ private void settle () {
     loop.run ();
 }
 
+private Shadow.Host? shared_host;
+
+private Shadow.Host test_host () throws Error {
+    // Presentation fixtures share one application registration on their private
+    // bus, just as ordinary windows share the process's application instance.
+    if (shared_host == null) { shared_host = new Shadow.Host (); shared_host.register (); }
+    return shared_host;
+}
+
 private Gtk.Widget? find_surface (Gtk.Widget widget) {
     if (widget.has_css_class ("shadow-composer")) return widget;
     for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
@@ -88,6 +97,52 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/prompt-context-live-toggles-and-narrow-layout", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--input", "composer", "--", "fish"});
+            request.session = "private-prompt-context";
+            request.cwd = Environment.get_tmp_dir ();
+            request.width = 920; request.height = 650;
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session);
+            settle ();
+            var editor = find_editor (window.child);
+            editor.buffer.text = "preserved draft";
+            assert (session.shell_context ({"1", "7", "0,7", "2345", "/tmp/日本語", "science", "1", "2", "fixture", "host"}));
+            session.input_session.report (session.input_session.token, "ready", "");
+            host.preferences.set_context_visible ("identity", true);
+            settle ();
+            foreach (string name in new string[] {"directory", "result", "duration", "environment", "identity", "jobs"})
+                assert (find_css (window.child, "context-" + name).visible);
+            var context = (Shadow.ContextBar) find_css (window.child, "composer-context");
+            var result = find_css (window.child, "context-result");
+            assert (result.tooltip_text.contains ("exit: 7") && result.tooltip_text.contains ("0|7"));
+            assert (find_css (window.child, "context-environment").tooltip_text.contains ("/tmp/日本語"));
+            host.preferences.set_context_visible ("environment", false);
+            assert (!find_css (window.child, "context-environment").visible);
+            host.preferences.set_context_visible ("enabled", false);
+            assert (!context.visible && !context.repository.enabled);
+            host.preferences.set_context_visible ("enabled", true);
+            assert (context.visible && !find_css (window.child, "context-environment").visible);
+            host.preferences.set_context_visible ("environment", true);
+            session.input_session.report (session.input_session.token, "busy", "");
+            assert (!result.visible && !find_css (window.child, "context-duration").visible);
+            session.input_session.report (session.input_session.token, "ready", "");
+            window.set_default_size (380, 650);
+            settle ();
+            assert (window.get_width () <= 400 && context.get_width () <= window.get_width ());
+            assert (context.get_height () < 180 && editor.source () == "preserved draft");
+            run_private ({"import", "-window", "root", "/tmp/shadow-term-prompt-context.png"});
+            assert (session.shell_context ({"1", "0", "0", "100", "", "", "0", "0", "fixture", "host"}));
+            assert (!result.visible && !find_css (window.child, "context-duration").visible &&
+                !find_css (window.child, "context-environment").visible && !find_css (window.child, "context-jobs").visible);
+            host.preferences.reset_context ();
+            window.close_workspace ();
+            settle ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/floating-completion-pointer-and-scroll", () => {
         try {
             var editor = new RichInput ();
@@ -133,8 +188,7 @@ int main (string[] args) {
     });
     Test.add_func ("/presentation/live-style-source-and-compact-layout", () => {
         try {
-            var host = new Shadow.Host ();
-            host.register ();
+            var host = test_host ();
             var request = Shadow.Request.parse ({"shadow-term", "--input", "composer", "--", "fish"});
             request.session = "private-style-test";
             request.cwd = Environment.get_tmp_dir ();
