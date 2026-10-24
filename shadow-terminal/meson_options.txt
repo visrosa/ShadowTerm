@@ -1,0 +1,2 @@
+option('vte-library-dir', type: 'string', value: '',
+       description: 'Private VTE 0.82.4 library directory prepared with Shadow presentation hooks')

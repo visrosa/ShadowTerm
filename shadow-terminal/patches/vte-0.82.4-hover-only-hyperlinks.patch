@@ -1,0 +1,63 @@
+--- a/src/vte.cc
++++ b/src/vte.cc
+@@ -9007,7 +9007,7 @@
+                                                     y + m_regex_underline_position + m_regex_underline_thickness - 1,
+                                                     VTE_LINE_WIDTH,
+                                                     &fg);
+-                        } else if (hyperlink) {
++                        } else if (hyperlink && !gtk_style_context_has_class(gtk_widget_get_style_context(m_widget), "shadow-hover-links")) {
+                                 for (double j = 1.0 / 6.0; j < columns; j += 0.5) {
+                                         m_draw.fill_rectangle(
+                                                                  xl + j * column_width,
+@@ -9683,6 +9683,9 @@
+ void
+ Terminal::paint_cursor()
+ {
++        if (gtk_style_context_has_class(gtk_widget_get_style_context(m_widget), "shadow-composer-cursor"))
++                return;
++
+         vte::view::DrawingContext::TextRequest item;
+         vte::grid::row_t drow;
+         vte::grid::column_t lcol, vcol;
+@@ -10723,6 +10726,8 @@
+ 	/* Clear the scrollback buffers and reset the cursors. Switch to normal screen. */
+ 	if (clear_history) {
+                 m_screen = &m_normal_screen;
++                g_object_set_data(G_OBJECT(m_widget), "shadow-alternate-screen", nullptr);
++                g_object_notify(G_OBJECT(m_widget), "shadow-alternate-screen");
+                 m_normal_screen.scroll_delta = m_normal_screen.insert_delta =
+                         m_normal_screen.row_data->reset();
+                 m_normal_screen.cursor.row = m_normal_screen.insert_delta;
+--- a/src/vtegtk.cc
++++ b/src/vtegtk.cc
+@@ -1019,6 +1019,9 @@
+ 
+ 	switch (prop_id)
+                 {
++                case LAST_PROP:
++                        g_value_set_boolean(value, g_object_get_data(object, "shadow-alternate-screen") != nullptr);
++                        break;
+                 case PROP_HADJUSTMENT:
+                         g_value_set_object (value, widget->hadjustment());
+                         break;
+@@ -2781,6 +2784,9 @@
+                                      GParamFlags(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+ 
+         g_object_class_install_properties(gobject_class, LAST_PROP, pspecs);
++        g_object_class_install_property(gobject_class, LAST_PROP,
++                g_param_spec_boolean("shadow-alternate-screen", nullptr, nullptr, false,
++                                     GParamFlags(G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
+ 
+ #if VTE_GTK == 3
+ 	/* Disable GtkWidget's keybindings except for Shift-F10 and MenuKey
+--- a/src/vteseq.cc
++++ b/src/vteseq.cc
+@@ -267,6 +267,8 @@
+         auto cc = m_screen->cursor.col;
+         auto cadv = m_screen->cursor_advanced_by_graphic_character;
+         m_screen = new_screen;
++        g_object_set_data(G_OBJECT(m_widget), "shadow-alternate-screen", GINT_TO_POINTER(new_screen == &m_alternate_screen));
++        g_object_notify(G_OBJECT(m_widget), "shadow-alternate-screen");
+         m_screen->cursor.row = cr + m_screen->insert_delta;
+         m_screen->cursor.col = cc;
+         m_screen->cursor_advanced_by_graphic_character = cadv;
