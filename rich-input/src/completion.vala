@@ -70,6 +70,14 @@ namespace VCom {
     }
 
     public class CompletionItem : Object {
+        public weak CompletionProvider? provider;
+        public string id = "";
+        public string kind = "";
+        public string group = "";
+        public string provenance = "";
+        public string preview_value = "";
+        public string preview_kind = "file";
+        public bool continue_after = false;
         public string label;
         public string insertion;
         public string detail;
@@ -82,12 +90,35 @@ namespace VCom {
         }
     }
 
+    public enum CompletionState { UNKNOWN, COMPLETE, TRUNCATED, UNAVAILABLE, FAILED }
+
+    public class CompletionBatch : Object {
+        public bool authoritative = false;
+        public CompletionItem[] items;
+        public CompletionState state;
+        public string message;
+        public CompletionBatch (CompletionItem[] items, CompletionState state = CompletionState.UNKNOWN, string message = "") {
+            this.items = items; this.state = state; this.message = message;
+        }
+    }
+
     public abstract class CompletionProvider : Object {
+        // Legacy arrays have unknown completeness, so a lone result is not
+        // evidence that implicit unique insertion is safe.
+        public virtual async CompletionBatch complete_batch (CompletionContext context, Cancellable cancel) throws Error {
+            return new CompletionBatch (yield complete (context, cancel));
+        }
+        public virtual async string preview (CompletionContext context, CompletionItem item, Cancellable cancel) throws Error {
+            return item.detail;
+        }
         public abstract async CompletionItem[] complete (CompletionContext context, Cancellable cancel) throws Error;
         public virtual CompletionItem? expand (CompletionContext context) { return null; }
     }
 
     public class BuiltinProvider : CompletionProvider {
+        public override async CompletionBatch complete_batch (CompletionContext context, Cancellable cancel) throws Error {
+            return new CompletionBatch (yield complete (context, cancel), CompletionState.COMPLETE);
+        }
         public override async CompletionItem[] complete (CompletionContext context, Cancellable cancel) throws Error {
             cancel.set_error_if_cancelled ();
             CompletionItem[] items = {};

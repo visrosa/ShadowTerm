@@ -8,9 +8,12 @@ int main (string[] args) {
             var settings = new Shadow.Preferences (filename);
             assert (settings.context_visible ("enabled") && settings.context_visible ("git") && !settings.context_visible ("identity"));
             settings.set_context_visible ("git", false);
+            settings.set_input_guard (false);
+            settings.set_docs_dismiss (true);
             settings.set_context_visible ("identity", true);
             settings.apply ("Monospace 14", "Sans 13", 0.65, 25000, false, false, "#112233", "#445566", 0.5);
             var loaded = new Shadow.Preferences (filename);
+            assert (!loaded.guard_pane_input && loaded.docs_dismiss);
             assert (!loaded.context_visible ("git") && loaded.context_visible ("identity"));
             assert (loaded.terminal_font == "Monospace 14" && loaded.editor_font == "Sans 13");
             assert (loaded.opacity == 0.65 && loaded.scrollback == 25000);

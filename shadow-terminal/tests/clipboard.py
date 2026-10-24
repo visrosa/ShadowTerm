@@ -10,7 +10,11 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
 Gtk.init()
-clipboard = Gdk.Display.get_default().get_clipboard()
+primary = "--primary" in sys.argv
+if primary:
+    sys.argv.remove("--primary")
+clipboard = (Gdk.Display.get_default().get_primary_clipboard() if primary else
+             Gdk.Display.get_default().get_clipboard())
 loop = GLib.MainLoop()
 if sys.argv[1] == "--read":
     def received(clipboard, result):

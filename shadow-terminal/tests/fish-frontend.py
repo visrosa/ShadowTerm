@@ -58,6 +58,40 @@ def worker(tmp):
         xdo("windowfocus", "--sync", wid)
         harness.wait_for(lambda: "ready" in state(), "fish readiness event")
         time.sleep(0.05)
+        # Clicking output must not turn accidental text input into native
+        # shell source. All three insertion paths edit the Composer instead.
+        for mode in ("typing", "clipboard", "primary"):
+            marker = f"guard-{mode}"
+            source = f"printf guarded > {tmp}/{marker}"
+            owner = None
+            if mode != "typing":
+                payload = tmp / "guard-payload"
+                payload.write_text(source)
+                args = [sys.executable, str(HERE / "clipboard.py"), str(payload)]
+                if mode == "primary": args.append("--primary")
+                owner = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, text=True)
+                assert select.select([owner.stdout], [], [], 4)[0]
+                assert owner.stdout.readline().strip() == "ready"
+            try:
+                xdo("mousemove", "--window", wid, "350", "200", "click", "1")
+                if mode == "typing": text(source)
+                elif mode == "clipboard": xdo("key", "ctrl+shift+v")
+                else: xdo("click", "2")
+                time.sleep(.08)
+                assert not read(marker), "Insertion must not execute"
+                xdo("key", "ctrl+a", "ctrl+shift+c")
+                copied = subprocess.check_output([sys.executable, str(HERE / "clipboard.py"), "--read"], env=env, text=True, timeout=4)
+                assert copied == source, (mode, copied, source)
+                xdo("key", "Right", "Return")
+                try:
+                    harness.wait_for(lambda: read(marker) == "guarded", marker)
+                except AssertionError:
+                    subprocess.run(["import", "-window", wid, "/tmp/shadow-input-failure.png"], env=env, timeout=4)
+                    raise
+                harness.wait_for(lambda: "ready" in state(), "ready after guard test")
+            finally:
+                if owner:
+                    owner.terminate(); owner.wait(timeout=3)
         command(f"fish_prompt > {tmp}/hidden-prompt; fish_right_prompt > {tmp}/hidden-right; printf checked > {tmp}/hidden-ready", "hidden-ready")
         assert read("hidden-prompt") == "" and read("hidden-right") == ""
         xdo("key", "ctrl+shift+m")

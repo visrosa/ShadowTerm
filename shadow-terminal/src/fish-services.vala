@@ -101,7 +101,24 @@ namespace Shadow {
             return null;
         }
 
+        private bool truncated;
+        public override async VCom.CompletionBatch complete_batch (VCom.CompletionContext context, Cancellable cancel) throws Error {
+            var values = yield complete (context, cancel);
+            return new VCom.CompletionBatch (values, truncated ? VCom.CompletionState.TRUNCATED : VCom.CompletionState.COMPLETE);
+        }
+
+        public override async string preview (VCom.CompletionContext context, VCom.CompletionItem item, Cancellable cancel) throws Error {
+            var request = new Json.Object ();
+            request.set_string_member ("kind", "preview");
+            request.set_string_member ("value", item.preview_value);
+            request.set_string_member ("cwd", context.directory);
+            request.set_string_member ("description", item.detail);
+            request.set_string_member ("preview_kind", item.preview_kind);
+            return (yield ContentService.request (request, context.directory, cancel)).get_string ();
+        }
+
         public override async VCom.CompletionItem[] complete (VCom.CompletionContext context, Cancellable cancel) throws Error {
+            truncated = false;
             if (!enabled || !context.fish) return yield new VCom.BuiltinProvider ().complete (context, cancel);
             // Fish returns a complete escaped token, including an opening quote.
             // Skip substitutions anywhere in the query rather than expanding a
@@ -112,13 +129,28 @@ namespace Shadow {
             string output = yield query ({"fish", "--no-config", "-c", setup, source}, definitions, context.directory, cancel, complete_path, function_path);
             VCom.CompletionItem[] items = {};
             foreach (string line in output.split ("\n")) {
-                if (line == "" || items.length >= 128) continue;
+                if (line == "") continue;
+                if (items.length >= 128) { truncated = true; break; }
                 int tab = line.index_of_char ('\t');
                 string insertion = tab < 0 ? line : line.substring (0, tab);
                 // --escape provides fish source, including literal filenames.
                 string description = tab < 0 ? "" : line.substring (tab + 1);
-                items += new VCom.CompletionItem (context, insertion, insertion,
+                // Prefix/suffix constraints prevent a mid-token completion from
+                // dropping source that the prefix-only fish query never saw.
+                string suffix = context.source.substring (context.source.index_of_nth_char (context.cursor),
+                    context.source.index_of_nth_char (context.end) - context.source.index_of_nth_char (context.cursor));
+                if (suffix != "" && !insertion.has_suffix (suffix)) continue;
+                var item = new VCom.CompletionItem (context, insertion, insertion,
                     description == "" ? "Fish completion" : description);
+                item.id = insertion; item.provenance = "fish";
+                var values = words (insertion);
+                if (values.length == 1) {
+                    item.preview_value = values[0];
+                    item.continue_after = values[0].has_suffix ("/");
+                    item.kind = item.continue_after ? "directory" : "";
+                    if (context.command_prefix.strip ().has_prefix ("git ")) item.preview_kind = "git";
+                }
+                items += item;
             }
             return items;
         }
@@ -158,6 +190,64 @@ namespace Shadow {
                 process.force_exit ();
                 try { yield process.wait_async (null); } catch (Error ignored) {}
             }
+        }
+    }
+
+    public class NativeProvider : VCom.CompletionProvider {
+        public bool enabled = false;
+        public override async VCom.CompletionItem[] complete (VCom.CompletionContext context, Cancellable cancel) throws Error {
+            return (yield complete_batch (context, cancel)).items;
+        }
+
+        public override async VCom.CompletionBatch complete_batch (VCom.CompletionContext context, Cancellable cancel) throws Error {
+            if (!enabled || !context.fish || !context.literal || !context.query_safe) return new VCom.CompletionBatch ({});
+            if (!FileUtils.test (Path.build_filename (Environment.get_user_config_dir (), "shadow-term", "completions"), FileTest.IS_DIR))
+                return new VCom.CompletionBatch ({}, VCom.CompletionState.COMPLETE);
+            var data = ContentService.make_request ("lookup");
+            data.set_string_member ("source", context.command_prefix);
+            data.set_int_member ("cursor", context.command_prefix.char_count ());
+            var lookup = yield ContentService.request (data, context.directory, cancel);
+            var object = lookup.get_object ();
+            object.set_string_member ("prefix", context.prefix);
+            object.set_string_member ("suffix", context.source.substring (context.source.index_of_nth_char (context.cursor),
+                context.source.index_of_nth_char (context.end) - context.source.index_of_nth_char (context.cursor)));
+            object.set_string_member ("cwd", context.directory);
+            data = ContentService.make_request ("complete");
+            data.set_member ("context", lookup);
+            data.set_string_member ("config", Path.build_filename (Environment.get_user_config_dir (), "shadow-term", "completions"));
+            var result = (yield ContentService.request (data, context.directory, cancel)).get_object ();
+            VCom.CompletionItem[] items = {};
+            var values = result.get_array_member ("items");
+            for (uint i = 0; i < values.get_length (); i++) {
+                var value = values.get_object_element (i);
+                string literal = value.get_string_member ("value");
+                var item = new VCom.CompletionItem (context, literal, VCom.LocalFilesProvider.fish_literal (literal), value.get_string_member ("description"));
+                item.id = literal; item.provenance = "native";
+                if (value.has_member ("kind")) item.kind = value.get_string_member ("kind");
+                if (value.has_member ("group")) item.group = value.get_string_member ("group");
+                item.preview_value = value.has_member ("preview") ? value.get_string_member ("preview") : literal;
+                item.continue_after = value.has_member ("continue") && value.get_boolean_member ("continue");
+                items += item;
+            }
+            bool complete = result.get_boolean_member ("complete");
+            if (result.get_boolean_member ("matched") && result.get_boolean_member ("files")) {
+                foreach (var item in yield new VCom.LocalFilesProvider ().complete (context, cancel)) {
+                    item.id = item.insertion; item.provenance = "local";
+                    var literal = FishProvider.words (item.insertion);
+                    if (literal.length == 1) item.preview_value = literal[0];
+                    item.continue_after = item.label.has_suffix ("/");
+                    items += item;
+                }
+                // The legacy bounded enumerator cannot establish completeness.
+                complete = false;
+            }
+            var batch = new VCom.CompletionBatch (items, complete ? VCom.CompletionState.COMPLETE : VCom.CompletionState.TRUNCATED, result.get_string_member ("message"));
+            batch.authoritative = result.get_boolean_member ("matched");
+            return batch;
+        }
+
+        public override async string preview (VCom.CompletionContext context, VCom.CompletionItem item, Cancellable cancel) throws Error {
+            return yield new FishProvider ().preview (context, item, cancel);
         }
     }
 

@@ -5,6 +5,8 @@ namespace Shadow {
         public double opacity = 1;
         public int64 scrollback = 10000;
         public bool inherit_style = true;
+        public bool guard_pane_input = true;
+        public bool docs_dismiss = false;
         public bool system_colors = true;
         public string foreground = "#eeeeec";
         public string background = "#20242b";
@@ -27,6 +29,8 @@ namespace Shadow {
                 if (value.is_finite ()) opacity = double.max (0, double.min (1, value));
             } catch (Error error) {}
             try { scrollback = int64.max (100, int64.min (100000, file.get_int64 ("terminal", "scrollback"))); } catch (Error error) {}
+            try { docs_dismiss = file.get_boolean ("documentation", "dismiss-on-focus-loss"); } catch (Error error) {}
+            try { guard_pane_input = file.get_boolean ("terminal", "guard-pane-input"); } catch (Error error) {}
             try { inherit_style = file.get_boolean ("appearance", "inherit-pane-style"); } catch (Error error) {}
             try { system_colors = file.get_boolean ("appearance", "system-colors"); } catch (Error error) {}
             try { foreground = valid_color (file.get_string ("appearance", "foreground"), foreground); } catch (Error error) {}
@@ -113,12 +117,24 @@ namespace Shadow {
             save ();
         }
 
+        public void set_docs_dismiss (bool enabled) throws Error {
+            docs_dismiss = enabled; changed (); save ();
+        }
+
+        public void set_input_guard (bool enabled) throws Error {
+            guard_pane_input = enabled;
+            changed ();
+            save ();
+        }
+
         private void save () throws Error {
             var file = new KeyFile ();
             file.set_string ("appearance", "terminal-font", terminal_font);
             file.set_string ("appearance", "editor-font", editor_font);
             file.set_double ("appearance", "opacity", this.opacity);
             file.set_int64 ("terminal", "scrollback", this.scrollback);
+            file.set_boolean ("terminal", "guard-pane-input", guard_pane_input);
+            file.set_boolean ("documentation", "dismiss-on-focus-loss", docs_dismiss);
             file.set_boolean ("appearance", "inherit-pane-style", inherit_style);
             file.set_boolean ("appearance", "system-colors", system_colors);
             file.set_string ("appearance", "foreground", this.foreground);
@@ -225,9 +241,15 @@ namespace Shadow {
             }
             grid.attach (new Gtk.Label ("Transparency depends on compositor support.") {xalign = 0, wrap = true}, 0, 9, 2);
             grid.attach (new Gtk.Expander ("Composer Context") {child = new ContextOptions (settings)}, 0, 10, 2);
-            grid.attach (status, 0, 11, 2);
+            var guard = new Gtk.CheckButton.with_label ("Route Pane text input to active Composer") {active = settings.guard_pane_input,
+                tooltip_text = "Typing and pasting at a shell prompt go to Composer, even when the Pane has focus"};
+            guard.toggled.connect (() => {
+                try { settings.set_input_guard (guard.active); } catch (Error error) { status.label = error.message; }
+            });
+            grid.attach (guard, 0, 11, 2);
+            grid.attach (status, 0, 12, 2);
             var reset = new Gtk.Button.with_label ("Restore Defaults") {halign = Gtk.Align.START};
-            grid.attach (reset, 0, 12, 2);
+            grid.attach (reset, 0, 13, 2);
             set_child (grid);
             terminal.notify["font-desc"].connect (schedule_apply);
             editor.notify["font-desc"].connect (schedule_apply);
@@ -254,7 +276,8 @@ namespace Shadow {
                 reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b");
                 foreground.rgba = reset_fg; background.rgba = reset_bg;
                 header_boost.set_value (0);
-                try { settings.reset_context (); } catch (Error error) { status.label = error.message; }
+                guard.active = true;
+                try { settings.set_input_guard (true); settings.set_docs_dismiss (false); settings.reset_context (); } catch (Error error) { status.label = error.message; }
                 updating = false;
                 schedule_apply ();
             });

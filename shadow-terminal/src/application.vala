@@ -33,12 +33,15 @@ namespace Shadow {
         private string last_source = "";
         private bool enter_submission = false;
         private bool previous_ready = false;
+        private uint input_epoch = 0;
+        private bool forwarding_key = false;
         private bool alternate_screen = false;
         private bool alternate_composer_override = false;
         private bool adjusting_composer_toggle = false;
         private string shell_cwd;
         private ComposerAssist assistance;
         private FishProvider fish_provider = new FishProvider ();
+        private NativeProvider native_provider = new NativeProvider ();
         private FishAnalysis analysis;
         private Gtk.Revealer search;
         private Gtk.SearchEntry search_entry;
@@ -91,7 +94,18 @@ namespace Shadow {
             editor.fish_mode = shell_editor;
             editor.working_directory = shell_cwd;
             assistance = new ComposerAssist (editor);
-            if (shell_editor) assistance.set_provider (fish_provider);
+            assistance.open_preview.connect ((title, text) => {
+                var view = new RichInput () {editable = false, cursor_visible = false, source_mode = true};
+                view.buffer.text = text;
+                var popup = new Gtk.Window () {title = title, transient_for = window, application = host, destroy_with_parent = true,
+                    default_width = 720, default_height = 480, child = new Gtk.ScrolledWindow () {child = view}};
+                popup.titlebar = new Gtk.HeaderBar ();
+                popup.present ();
+            });
+            if (shell_editor) {
+                assistance.set_provider (native_provider);
+                assistance.add_provider (fish_provider);
+            }
             analysis = new FishAnalysis (editor) {enabled = false};
             fish_provider.enabled = false;
             desktop_settings = Granite.Settings.get_default ();
@@ -125,6 +139,33 @@ namespace Shadow {
 
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
+                if (!forwarding_key && terminal.has_focus && guard_pane_input ()) {
+                    // Keep emulator replies enabled. User insertion is routed
+                    // at capture phase before VTE's key/IME controller sees it.
+                    bool pane_key = key == Gdk.Key.Page_Up || key == Gdk.Key.Page_Down ||
+                        key == Gdk.Key.Shift_L || key == Gdk.Key.Shift_R || key == Gdk.Key.Control_L || key == Gdk.Key.Control_R ||
+                        key == Gdk.Key.Alt_L || key == Gdk.Key.Alt_R || key == Gdk.Key.Super_L || key == Gdk.Key.Super_R;
+                    uint lower = Gdk.keyval_to_lower (key);
+                    bool host_shortcut = (state & Gdk.ModifierType.CONTROL_MASK) != 0 &&
+                        (key == Gdk.Key.comma || ((state & Gdk.ModifierType.SHIFT_MASK) != 0 &&
+                        ("cvnwhmfl".index_of_char (lower) >= 0 || key == Gdk.Key.Return ||
+                         key == Gdk.Key.plus || key == Gdk.Key.equal || key == Gdk.Key.minus || key == Gdk.Key.underscore || key == Gdk.Key.@0 || key == Gdk.Key.parenright)));
+                    bool text_key = !pane_key && !host_shortcut;
+                    if ((key == Gdk.Key.Insert && (state & Gdk.ModifierType.SHIFT_MASK) != 0) ||
+                        (Gdk.keyval_to_lower (key) == Gdk.Key.v && (state & Gdk.ModifierType.CONTROL_MASK) != 0)) {
+                        paste_clipboard (); return true;
+                    }
+                    if (text_key) {
+                        editor.grab_focus ();
+                        forwarding_key = true;
+                        bool handled = keys.forward (editor);
+                        forwarding_key = false;
+                        return handled;
+                    }
+                }
+                if (editor.has_focus && key == Gdk.Key.h && (state & Gdk.ModifierType.ALT_MASK) != 0) {
+                    show_documentation (); return true;
+                }
                 if (editor.has_focus && assistance.handle_key (key, state)) return true;
                 if (editor.has_focus && key == Gdk.Key.Return &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK &&
@@ -182,7 +223,7 @@ namespace Shadow {
                             get_clipboard ().set_text (editor.buffer.get_text (start, end, true));
                     } else terminal_context.copy_selection ();
                     return true;
-                case Gdk.Key.v: terminal.paste_clipboard (); return true;
+                case Gdk.Key.v: paste_clipboard (); return true;
                 case Gdk.Key.n: host.new_terminal (shell_cwd); return true;
                 case Gdk.Key.w: end_session (); return true;
                 case Gdk.Key.h: hide_session (); return true;
@@ -330,6 +371,7 @@ namespace Shadow {
             tools.append (source);
             editor.bind_property ("fish-mode", source, "visible", BindingFlags.SYNC_CREATE | BindingFlags.INVERT_BOOLEAN);
             tools.append (editor.formatting_toolbar ());
+            menu_item (tools, popover, "Documentation", "Alt+H", show_documentation);
             menu_item (tools, popover, "Suggestions", "Ctrl+Space", () => { editor.grab_focus (); assistance.request.begin (); });
             recall_button = menu_item (tools, popover, "Recall Last Input", "Ctrl+Shift+L", () => {
                 if (editor.source () == "") editor.buffer.text = last_source;
@@ -376,6 +418,14 @@ namespace Shadow {
             return composer;
         }
 
+        private void show_documentation () {
+            Gtk.TextIter cursor, start, end;
+            editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
+            string selection = editor.buffer.get_selection_bounds (out start, out end) ? editor.buffer.get_text (start, end, true) : "";
+            var documentation = new DocumentationWindow (window, host.preferences, editor.source (), cursor.get_offset (), selection, shell_cwd);
+            documentation.present ();
+        }
+
         private void show_shortcuts () {
             if (shortcuts_window == null) {
                 shortcuts_window = new Gtk.Window () {title = "Keyboard Shortcuts", transient_for = window, application = host,
@@ -419,7 +469,7 @@ namespace Shadow {
             update_composer_visibility ();
             context_bar.set_ready (input_session.ready);
             bool command_input = shell_editor && input_session.ready;
-            fish_provider.enabled = command_input;
+            fish_provider.enabled = native_provider.enabled = command_input;
             if (analysis.enabled != command_input) analysis.enabled = command_input;
             submit_button.sensitive = running && !input_session.pending && editor.source () != "";
             submit_button.visible = editor.source () != "" && !input_session.pending;
@@ -430,7 +480,7 @@ namespace Shadow {
             bool became_ready = input_session.ready && !previous_ready;
             bool became_busy = !input_session.ready && previous_ready;
             previous_ready = input_session.ready;
-            if (became_ready || became_busy) assistance.dismiss ();
+            if (became_ready || became_busy) { input_epoch++; assistance.dismiss (); }
             sync_presentation ();
             if (shell_editor) {
                 if (running) feedback_bar.visible = input_session.pending;
@@ -605,13 +655,43 @@ namespace Shadow {
             }
         }
 
+        public bool guard_pane_input () {
+            return host.preferences.guard_pane_input && running && shell_editor && input_session.ready && composer.reveal_child;
+        }
+
+        public void paste_clipboard (bool primary = false) {
+            if (guard_pane_input ()) paste_into_composer.begin (primary);
+            else if (primary) terminal.paste_primary ();
+            else terminal.paste_clipboard ();
+        }
+
+        private async void paste_into_composer (bool primary) {
+            uint epoch = input_epoch;
+            string token = input_session.token;
+            try {
+                var clipboard = primary ? get_primary_clipboard () : get_clipboard ();
+                string? text = yield clipboard.read_text_async (null);
+                // Never retarget an asynchronous paste after a tab/foreground
+                // transition. It is an editor insertion, never shell input.
+                if (text == null || closing || !is_presented || epoch != input_epoch ||
+                    token != input_session.token || !guard_pane_input ()) return;
+                editor.buffer.begin_user_action ();
+                editor.buffer.delete_selection (true, true);
+                editor.buffer.insert_at_cursor (text, -1);
+                editor.buffer.end_user_action ();
+                editor.grab_focus ();
+            } catch (Error error) { feedback.label = error.message; feedback_bar.visible = true; }
+        }
+
         private void paste_draft () {
+            if (guard_pane_input ()) { editor.grab_focus (); return; }
             if (!running) return;
             terminal.paste_text (editor.source ());
             terminal.grab_focus ();
         }
 
         public void start () {
+            input_epoch++;
             if (spawning || running || closing) return;
             spawning = true;
             restart.visible = false;
@@ -864,7 +944,7 @@ int main (string[] args) {
         stdout.printf ("Shadow Term %s\n", Shadow.VERSION); return 0;
     }
     if (args.length == 2 && (args[1] == "--help" || args[1] == "-h")) {
-        stdout.printf ("""Shadow Term 0.0.6 — interactive shell and command windows
+        stdout.printf ("""Shadow Term 0.0.7 — interactive shell and command windows
 Usage: shadow-term [OPTIONS] [-- COMMAND ARG...]
   --session NAME           Named session (default: default)
   --cwd DIRECTORY          Initial working directory (default: invoking directory)

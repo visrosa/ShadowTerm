@@ -5,9 +5,13 @@ private void spin (uint milliseconds) {
 }
 
 private class DelayedProvider : VCom.CompletionProvider {
+    public int simultaneous = 0;
+    public int maximum = 0;
     public override async VCom.CompletionItem[] complete (VCom.CompletionContext context, Cancellable cancel) throws Error {
+        simultaneous++; maximum = int.max (maximum, simultaneous);
         Timeout.add (40, () => { complete.callback (); return Source.REMOVE; });
         yield;
+        simultaneous--;
         // Deliberately ignore cancellation: the consumer must reject stale data.
         return {new VCom.CompletionItem (context, "zebra", "zebra", "Test provider")};
     }
@@ -22,6 +26,27 @@ private class DescribedProvider : VCom.CompletionProvider {
         }
         return items;
     }
+}
+
+private class CompleteProvider : VCom.CompletionProvider {
+    public bool truncated = false;
+    public override async VCom.CompletionItem[] complete (VCom.CompletionContext context, Cancellable cancel) throws Error {
+        VCom.CompletionItem[] items = {};
+        foreach (string value in new string[] {"alpha", "beta"})
+            if (value.has_prefix (context.prefix)) items += new VCom.CompletionItem (context, value, value, value == "beta" ? "Second description" : "First description") {id = value, continue_after = true};
+        return items;
+    }
+    public override async VCom.CompletionBatch complete_batch (VCom.CompletionContext context, Cancellable cancel) throws Error {
+        return new VCom.CompletionBatch (yield complete (context, cancel), truncated ? VCom.CompletionState.TRUNCATED : VCom.CompletionState.COMPLETE);
+    }
+}
+
+private Gtk.SearchEntry? suggestion_filter (Gtk.Widget widget) {
+    if (widget is Gtk.SearchEntry) return (Gtk.SearchEntry) widget;
+    for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
+        var entry = suggestion_filter (child); if (entry != null) return entry;
+    }
+    return null;
 }
 
 private Gtk.ListBox? suggestion_list (Gtk.Widget widget) {
@@ -112,10 +137,36 @@ void main (string[] args) {
         editor.set_editor_font ("Monospace 13");
         assert (editor.source () == source);
     });
+    Test.add_func ("/editor/refinement-filter-and-truncated-uniqueness", () => {
+        var editor = new RichInput () {fish_mode = true};
+        var assist = new ComposerAssist (editor);
+        var provider = new CompleteProvider (); assist.set_provider (provider);
+        var window = new Gtk.Window () {child = editor}; window.present (); spin (30);
+        editor.buffer.text = "a"; assist.request.begin (); spin (20);
+        editor.buffer.insert_at_cursor ("l", -1); spin (40);
+        assert (assist.visible && editor.source () == "al");
+        assist.handle_key (Gdk.Key.Tab, 0); assert (editor.source () == "alpha");
+        editor.buffer.undo (); assert (editor.source () == "al");
+        provider.truncated = true;
+        assist.request.begin (true); spin (20);
+        assert (editor.source () == "al" && assist.visible);
+        assist.dismiss (); editor.buffer.text = "";
+        assist.request.begin (); spin (20);
+        assist.handle_key (Gdk.Key.f, Gdk.ModifierType.CONTROL_MASK);
+        var filter = suggestion_filter (assist.panel); filter.text = "Second description"; spin (200);
+        assert (editor.source () == "" && assist.visible);
+        assert (suggestion_list (assist.panel).get_row_at_index (1) == null);
+        assert (suggestion_list (assist.panel).get_selected_row () == null);
+        assist.handle_key (Gdk.Key.Down, 0);
+        assist.handle_key (Gdk.Key.Return, 0); assert (editor.source () == "beta");
+        editor.buffer.undo (); assert (editor.source () == "");
+        window.destroy ();
+    });
     Test.add_func ("/editor/assistance-stale-results-and-undo", () => {
         var editor = new RichInput () {fish_mode = true};
         var assistance = new ComposerAssist (editor);
-        assistance.add_provider (new DelayedProvider ());
+        var slow = new DelayedProvider ();
+        assistance.add_provider (slow);
         var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
         body.append (editor);
         var window = new Gtk.Window () {child = body, title = "Isolated editor test"};
@@ -125,7 +176,8 @@ void main (string[] args) {
         assistance.request.begin ();
         editor.buffer.insert_at_cursor ("changed", -1);
         spin (80);
-        assert (!assistance.visible && editor.source () == "zchanged");
+        assert (assistance.visible && editor.source () == "zchanged" && slow.maximum == 1);
+        assistance.dismiss ();
         editor.buffer.text = "z";
         assistance.request.begin ();
         Gtk.TextIter start;

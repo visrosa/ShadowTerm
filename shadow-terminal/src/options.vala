@@ -1,5 +1,5 @@
 namespace Shadow {
-    public const string VERSION = "0.0.6";
+    public const string VERSION = "0.0.7";
 
     public errordomain OptionError { INVALID }
 
@@ -177,7 +177,8 @@ namespace Shadow {
             return Path.build_filename (Environment.get_user_state_dir (), "shadow-term", "geometry.ini");
         }
 
-        public Geometry (string name) {
+        public Geometry (string name, int default_width = 1000, int default_height = 700) {
+            width = default_width; height = default_height;
             try {
                 var file = new KeyFile (); file.load_from_file (path (), KeyFileFlags.NONE);
                 width = int.max (320, int.min (8192, file.get_integer (name, "width")));

@@ -34,6 +34,14 @@ public class RichInput : Gtk.TextView {
         base.dispose ();
     }
 
+    public override void size_allocate (int width, int height, int baseline) {
+        base.size_allocate (width, height, baseline);
+        // Popovers parented directly to a custom widget need a layout pass
+        // after their contents or the editor allocation changes.
+        for (var child = get_first_child (); child != null; child = child.get_next_sibling ())
+            if (child is Gtk.Popover && child.visible) ((Gtk.Popover) child).present ();
+    }
+
     public RichInput () {
         wrap_mode = Gtk.WrapMode.WORD_CHAR;
         left_margin = right_margin = 18;

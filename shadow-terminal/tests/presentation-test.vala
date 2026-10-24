@@ -4,6 +4,27 @@ private void settle () {
     loop.run ();
 }
 
+private class SlowAnalysis : Shadow.FishAnalysis {
+    public int starts = 0;
+    public int simultaneous = 0;
+    public int maximum = 0;
+    public string latest = "";
+    public SlowAnalysis (RichInput editor) { base (editor); }
+    public override async string check_syntax (string text, string directory, Cancellable cancel) throws Error {
+        starts++; simultaneous++; maximum = int.max (maximum, simultaneous); latest = text;
+        Timeout.add (110, () => { check_syntax.callback (); return Source.REMOVE; });
+        yield;
+        simultaneous--;
+        cancel.set_error_if_cancelled ();
+        return "fixture syntax";
+    }
+    public override async void check_path (File file, Cancellable cancel) throws Error {
+        Timeout.add (300, () => { check_path.callback (); return Source.REMOVE; });
+        yield;
+        cancel.set_error_if_cancelled ();
+    }
+}
+
 private Shadow.Host? shared_host;
 
 private Shadow.Host test_host () throws Error {
@@ -97,6 +118,69 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/analysis-prompt-newest-only-and-independent-paths", () => {
+        var editor = new RichInput () {fish_mode = true, working_directory = "/tmp"};
+        var window = new Gtk.Window () {child = editor}; window.present (); settle ();
+        var analysis = new SlowAnalysis (editor);
+        editor.buffer.text = "cat ./missing ";
+        var loop = new MainLoop ();
+        Timeout.add (20, () => { loop.quit (); return Source.REMOVE; }); loop.run ();
+        assert (analysis.starts == 1);
+        for (int i = 0; i < 10; i++) editor.buffer.insert_at_cursor ("x", -1);
+        settle ();
+        assert (analysis.starts == 2 && analysis.maximum == 1);
+        settle (); settle ();
+        assert (analysis.latest == editor.source () && analysis.status.visible && analysis.status.label == "Check fish syntax");
+        analysis.enabled = false;
+        settle ();
+        assert (analysis.starts == 2);
+        window.destroy ();
+    });
+    Test.add_func ("/presentation/documentation-source-navigation-and-source-preservation", () => {
+        try {
+            var host = test_host ();
+            var parent = new Gtk.Window () {application = host, title = "Documentation origin"}; parent.present ();
+            string config = Shadow.ContentService.configuration ();
+            DirUtils.create_with_parents (Path.get_dirname (config), 0700);
+            FileUtils.set_contents (config, "{\"sources\":[{\"name\":\"First\",\"argv\":[\"printf\",\"%s\",\"{query}\"]},{\"name\":\"Unavailable\",\"argv\":[\"/missing/vcom-documentation\"]},{\"name\":\"Third\",\"argv\":[\"printf\",\"%s\",\"{command}\"]}]}");
+            var docs = new Shadow.DocumentationWindow (parent, host.preferences, "echo (task list)", 9, "", "/tmp");
+            docs.present ();
+            for (int i = 0; i < 8; i++) settle ();
+            assert (docs.title == "Documentation · task");
+            var stack = (Gtk.Stack) ((Gtk.Widget) docs.child).get_first_child ().get_next_sibling ().get_next_sibling ();
+            assert (stack is Gtk.Stack);
+            var view = find_editor (stack);
+            assert (view.source () == "task-list" && !view.editable);
+            stack.visible_child_name = "1";
+            for (int i = 0; i < 3; i++) settle ();
+            stack.visible_child_name = "2";
+            for (int i = 0; i < 3; i++) settle ();
+            var third = (RichInput) ((Gtk.ScrolledWindow) stack.visible_child).child;
+            assert (third.source () == "task");
+            stack.visible_child_name = "0";
+            assert (view.source () == "task-list");
+            string doc_id = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Documentation · task$"});
+            string origin_id = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Documentation origin$"});
+            host.preferences.set_docs_dismiss (false);
+            run_private ({"xdotool", "windowfocus", "--sync", doc_id}); settle ();
+            run_private ({"xdotool", "windowfocus", "--sync", origin_id}); settle ();
+            assert (docs.visible);
+            host.preferences.set_docs_dismiss (true);
+            run_private ({"xdotool", "windowfocus", "--sync", doc_id}); settle ();
+            var owned_window = new Gtk.Window () {application = host, transient_for = docs, title = "Documentation owned", destroy_with_parent = true};
+            owned_window.present (); settle ();
+            string owned_id = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Documentation owned$"});
+            run_private ({"xdotool", "windowfocus", "--sync", owned_id}); settle ();
+            assert (docs.visible);
+            docs.set_default_size (880, 580); settle ();
+            run_private ({"xdotool", "windowfocus", "--sync", origin_id}); settle ();
+            assert (!docs.visible && run_private ({"xdotool", "getwindowfocus"}) == origin_id);
+            var saved = new Shadow.Geometry ("documentation");
+            assert (saved.width == 880 && saved.height == 580);
+            owned_window.destroy (); host.preferences.set_docs_dismiss (false);
+            parent.destroy (); FileUtils.unlink (config);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/prompt-context-live-toggles-and-narrow-layout", () => {
         try {
             var host = test_host ();
@@ -350,7 +434,10 @@ int main (string[] args) {
             assert (iter.has_tag (editor.buffer.tag_table.lookup ("path")));
             assert (editor.source () == "cat '日本 existing.txt'");
             editor.buffer.text = "cat missing.txt";
-            for (int i = 0; i < 6; i++) settle ();
+            settle ();
+            assert (!analysis.status.visible);
+            editor.buffer.insert_at_cursor (" ", -1);
+            for (int i = 0; i < 3; i++) settle ();
             assert (analysis.status.visible && analysis.status.label.contains ("does not exist"));
             editor.buffer.get_iter_at_offset (out iter, 6);
             assert (iter.has_tag (editor.buffer.tag_table.lookup ("diagnostic")));
@@ -367,6 +454,7 @@ int main (string[] args) {
             for (int i = 0; i < 6; i++) settle ();
             assert (!analysis.status.visible && editor.source () == "echo retained");
             editor.buffer.text = "cat '日本 existing.txt'";
+            editor.buffer.insert_at_cursor (" ", -1);
             editor.working_directory = Path.build_filename (directory, "other");
             DirUtils.create (editor.working_directory, 0700);
             for (int i = 0; i < 6; i++) settle ();
