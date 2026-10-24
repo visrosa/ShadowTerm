@@ -17,10 +17,10 @@ nice -n 15 meson compile -C build -j 1
 If your compiler is named `valac`, omit `VALAC=valac-0.56`. Standalone mode opens only the editor. To use it with `cv`, run from the ClaudeVassal repository:
 
 ```fish
-python3 shadow_terminal.py run --rich-input --gui ../Vibrant/rich-input/build/vibrant-rich-input
+python3 shadow_terminal.py run --rich-input --gui ../ShadowTerm/rich-input/build/vibrant-rich-input
 ```
 
-Omit `--rich-input` to retain fish input and use the window as a shadow display. The client can also attach separately with `./build/vibrant-rich-input --socket PATH`. See [[../../ClaudeVassal/SHADOW_PROTOCOL]] for launch options, messages, acknowledgement semantics, exact-source guarantees, and transport limits.
+Omit `--rich-input` to retain fish input and use the window as a shadow display. The client can also attach separately with `./build/vibrant-rich-input --socket PATH`. See the [ClaudeVassal shadow protocol](../../ClaudeVassal/SHADOW_PROTOCOL.md) in the optional sibling checkout for launch options, messages, acknowledgement semantics, exact-source guarantees, and transport limits.
 
 ## Interaction
 
@@ -43,10 +43,12 @@ The builtin provider supplies a small static fish help catalog and Markdown snip
 
 ## Checks
 
-On a test display, run `meson test -C build --print-errorlogs --num-processes 1`. The editor tests cover source round trips, hidden delimiters, Unicode offsets, undo, opaque code ranges and fish spans. The integration check requires Xvfb, xdotool, D-Bus, Python, fish, and a sibling ClaudeVassal checkout:
+The completion model suite can run without a display: `meson test -C build completion --print-errorlogs --num-processes 1`. The `editor` suite is graphical; run it only on a private test display/bus. Shadow Term's build includes the same editor tests, and its [integration harness](../shadow-terminal/README.md#verification-and-limits) runs them with disposable XDG state, history and Compose data. It is the preferred shared-widget check. The editor tests cover source round trips, hidden delimiters, Unicode offsets, undo, opaque code ranges and fish spans.
+
+The separate CV demonstration check requires Xvfb, xdotool, D-Bus, Python, fish, a built standalone demo and a sibling ClaudeVassal checkout. Run the following only in a disposable test environment: its harness supplies private display/bus, configuration and CV cache, but does not isolate all XDG homes, inherited fish history or GTK Compose data. Those boundaries must be supplied by the test environment; the terminal harness's full isolation should not be assumed here.
 
 ```fish
 nice -n 15 python3 tests/integration.py --cv ../../ClaudeVassal
 ```
 
-It creates a private Xvfb/D-Bus session using software rendering with D-Bus service activation disabled, drives the actual GTK editor, and verifies source in a stub Claude CLI's argv and the session cache, including recall and resubmission. It shuts down its own processes; it uses no live API or desktop windows. `--screenshot PATH` optionally captures the private test window and requires ImageMagick's `import`.
+It creates a private Xvfb/D-Bus session using software rendering with D-Bus service activation disabled, drives the actual GTK editor, and verifies source in a stub Claude CLI's argv and the session cache, including recall and resubmission. It shuts down its own processes and uses no live API or desktop windows; the filesystem-isolation limits above still apply. `--screenshot PATH` optionally captures the private test window and requires ImageMagick's `import`.
