@@ -1,13 +1,19 @@
 namespace Shadow {
-    // Diagnostics describe an immutable draft. Neither parsing nor filesystem
-    // checks execute source, and inconclusive expansion contexts stay unmarked.
+    // One syntax process per editor and two across the application. New edits
+    // replace the queued snapshot without repeatedly killing/forking a worker.
     public class FishAnalysis : Object {
         public bool enabled { get; set; default = true; }
         private weak RichInput editor;
         public Gtk.Label status = new Gtk.Label ("") {xalign = 0, visible = false, ellipsize = Pango.EllipsizeMode.END};
-        private uint debounce = 0;
-        private Cancellable? pending;
+        private uint dispatch = 0;
+        private Cancellable? syntax_cancel;
+        private Cancellable? path_cancel;
         private uint generation = 0;
+        private bool running = false;
+        private bool queued = false;
+        private static int workers = 0;
+        private string syntax_message = "";
+        private string syntax_detail = "";
 
         public FishAnalysis (RichInput editor) {
             this.editor = editor;
@@ -19,32 +25,84 @@ namespace Shadow {
             notify["enabled"].connect (schedule);
         }
 
+        private bool eligible () {
+            return enabled && editor.get_mapped () && editor.editable && editor.fish_mode &&
+                editor.source () != "" && editor.source ().length <= 16384;
+        }
+
         public void cancel () {
-            generation++;
-            if (debounce != 0) { Source.remove (debounce); debounce = 0; }
-            if (pending != null) pending.cancel ();
-            pending = null;
+            generation++; queued = false;
+            if (dispatch != 0) { Source.remove (dispatch); dispatch = 0; }
+            if (syntax_cancel != null) syntax_cancel.cancel ();
+            if (path_cancel != null) path_cancel.cancel ();
         }
 
         private void schedule () {
-            cancel ();
+            generation++;
+            if (path_cancel != null) path_cancel.cancel ();
             status.visible = false;
+            syntax_message = syntax_detail = "";
             editor.set_analysis (editor.source (), {});
-            if (!enabled || !editor.get_mapped () || !editor.editable || !editor.fish_mode || editor.source () == "" || editor.source ().length > 16384) return;
-            debounce = Timeout.add (300, () => { debounce = 0; refresh.begin (); return Source.REMOVE; });
+            queued = eligible ();
+            if (!queued) { cancel (); return; }
+            // Run after the complete edit transaction (including abbreviation,
+            // paste and IME commits), never from a raw Space key callback.
+            if (dispatch == 0 && !running) dispatch = Idle.add (() => { dispatch = 0; launch (); return Source.REMOVE; });
+        }
+
+        private void launch () {
+            if (!queued || !eligible () || running) return;
+            if (workers >= 2) {
+                dispatch = Timeout.add (16, () => { dispatch = 0; launch (); return Source.REMOVE; });
+                return;
+            }
+            queued = false; running = true; workers++;
+            refresh.begin ();
+        }
+
+        private bool current (uint version, string text, string directory) {
+            return version == generation && eligible () && text == editor.source () && directory == editor.working_directory;
+        }
+
+        public virtual async string check_syntax (string text, string directory, Cancellable cancel) throws Error {
+            return yield FishProvider.query ({"fish", "--no-config", "--no-execute"}, text, directory, cancel, "", "", true);
+        }
+
+        public virtual async void check_path (File file, Cancellable cancel) throws Error {
+            yield file.query_info_async ("standard::type", FileQueryInfoFlags.NONE, Priority.LOW, cancel);
         }
 
         private async void refresh () {
             uint version = generation;
             string text = editor.source (), directory = editor.working_directory;
             var cancel = new Cancellable ();
-            pending = cancel;
+            syntax_cancel = cancel;
+            uint deadline = Timeout.add (1500, () => { cancel.cancel (); return Source.REMOVE; });
+            string message = "", detail = "";
+            try {
+                string syntax = yield check_syntax (text, directory, cancel);
+                if (syntax != "") { message = "Check fish syntax"; detail = syntax.strip (); }
+            } catch (Error error) {
+                if (!(error is IOError.CANCELLED)) { message = "Analysis unavailable"; detail = error.message; }
+            }
+            var timer = MainContext.default ().find_source_by_id (deadline);
+            if (timer != null) timer.destroy ();
+            syntax_cancel = null; running = false; workers--;
+            if (current (version, text, directory) && !cancel.is_cancelled ()) {
+                syntax_message = message; syntax_detail = detail;
+                status.label = message; status.tooltip_text = detail; status.visible = message != "";
+                paths.begin (version, text, directory);
+            }
+            launch ();
+        }
+
+        private async void paths (uint version, string text, string directory) {
+            var cancel = new Cancellable ();
+            path_cancel = cancel;
             uint deadline = Timeout.add (1500, () => { cancel.cancel (); return Source.REMOVE; });
             RichSpan[] spans = {};
             string message = "", detail = "";
             try {
-                string syntax = yield FishProvider.query ({"fish", "--no-config", "--no-execute"}, text, directory, cancel, "", "", true);
-                if (syntax != "") { message = "Check fish syntax"; detail = syntax.strip (); }
                 var regex = new Regex ("#[^\\n]*|'(?:\\\\.|[^'\\\\])*'|\"(?:\\\\.|[^\"\\\\])*\"|[^\\s;|&<>]+|[;|&<>]");
                 MatchInfo match;
                 regex.match (text, 0, out match);
@@ -76,15 +134,15 @@ namespace Shadow {
                                 if (path.has_prefix ("~/")) path = Environment.get_home_dir () + path.substring (1);
                                 var file = File.new_for_path (directory).resolve_relative_path (path);
                                 try {
-                                    yield file.query_info_async ("standard::type", FileQueryInfoFlags.NONE, Priority.LOW, cancel);
+                                    yield check_path (file, cancel);
                                     spans += new RichSpan ("path", start, end);
                                 } catch (IOError.NOT_FOUND error) {
-                                    if (required_input) {
+                                    if (required_input && end < text.length) {
                                         spans += new RichSpan ("diagnostic", start, end);
                                         if (message == "") { message = "Path does not exist: " + literal[0]; detail = "Advisory only; the command can still be run."; }
                                     }
                                 } catch (IOError.NOT_DIRECTORY error) {
-                                    if (required_input) {
+                                    if (required_input && end < text.length) {
                                         spans += new RichSpan ("diagnostic", start, end);
                                         if (message == "") message = "A path component is not a directory";
                                     }
@@ -104,14 +162,17 @@ namespace Shadow {
                     match.next ();
                 }
             } catch (Error error) {
-                if (!(error is IOError.CANCELLED)) { message = "Analysis unavailable"; detail = error.message; }
+                // Metadata is advisory; inconclusive or cancelled work does not
+                // overwrite an independently published syntax diagnostic.
             }
             var timer = MainContext.default ().find_source_by_id (deadline);
             if (timer != null) timer.destroy ();
-            if (version != generation || cancel.is_cancelled () || text != editor.source () || directory != editor.working_directory) return;
-            pending = null;
+            if (!current (version, text, directory) || cancel.is_cancelled ()) return;
+            path_cancel = null;
             editor.set_analysis (text, spans);
-            status.label = message; status.tooltip_text = detail; status.visible = message != "";
+            status.label = syntax_message != "" ? syntax_message : message;
+            status.tooltip_text = syntax_message != "" ? syntax_detail : detail;
+            status.visible = status.label != "";
         }
     }
 }
