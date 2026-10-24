@@ -30,7 +30,8 @@ resources = gnome.compile_resources('shadow-resources', 'data/resources.xml', so
 executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'), install: false)
 app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
-                    'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/context.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
+                    'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/context.vala',
+                    'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
 app_sources += [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
            c_args: cflags, include_directories: app_includes, build_rpath: private_vte, install: false)
@@ -49,7 +50,7 @@ completion_test = executable('completion-test', completion, completion_checks, d
 test('completion', completion_test)
 preferences_test = executable('preferences-test', 'src/preferences.vala', 'tests/preferences-test.vala', dependencies: dependency('gtk4'))
 test('preferences', preferences_test)
-context_test = executable('context-test', 'src/context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
+context_test = executable('context-test', 'src/context.vala', 'src/prompt-context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
 test('repository-context', context_test)
 fish_services_test = executable('fish-services-test', 'src/fish-services.vala', completion, 'tests/fish-services-test.vala',
                                dependencies: dependency('gio-2.0'), vala_args: ['--pkg=posix'])

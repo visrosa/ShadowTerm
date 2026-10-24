@@ -46,8 +46,34 @@ function __vcom_presentation
     return $previous_status
 end
 
+function __vcom_postexec --on-event fish_postexec
+    # Capture both statuses before any provider/helper commands run. Keep this
+    # result across prompt repaints, completion queries and presentation toggles.
+    set --local previous $status $pipestatus
+    set --global __vcom_result $previous[1]
+    set --global __vcom_pipeline $previous[2..]
+    set --global __vcom_duration "$CMD_DURATION"
+    return $previous[1]
+end
+
 function __vcom_prompt --on-event fish_prompt
     set --local previous_status $status
+    set --local has_result 0
+    set --local result 0
+    set --local pipeline 0
+    set --local duration 0
+    if set --query __vcom_result
+        set has_result 1
+        set result $__vcom_result
+        set pipeline (string join , -- $__vcom_pipeline)
+        set duration $__vcom_duration
+    end
+    set --local remote 0
+    if test -n "$SSH_CONNECTION"; or test -n "$SSH_TTY"
+        set remote 1
+    end
+    command "$SHADOW_TERM_HELPER" context "$has_result" "$result" "$pipeline" "$duration" \
+        "$VIRTUAL_ENV" "$CONDA_DEFAULT_ENV" "$remote" "$(count (jobs --group))" "$USER" "$hostname" 2>/dev/null
     command "$SHADOW_TERM_HELPER" metadata "$(abbr --show)" "$(complete)" "$(string join : -- $fish_complete_path)" "$(string join : -- $fish_function_path)" 2>/dev/null
     if not command "$SHADOW_TERM_HELPER" ready 2>/dev/null
         # A disconnected host must not leave a usable native shell promptless.

@@ -49,9 +49,7 @@ namespace Shadow {
         private bool presentation_dirty = false;
         private Gtk.Box feedback_bar;
         private Gtk.Box compose_box;
-        private Gtk.Label directory_label;
-        private Gtk.Label repository_label;
-        private RepositoryContext repository = new RepositoryContext ();
+        private ContextBar context_bar;
         private Gtk.Window? shortcuts_window;
         private Granite.Settings desktop_settings;
         private ulong theme_handler;
@@ -286,13 +284,6 @@ namespace Shadow {
             return menu;
         }
 
-        private static string compact_directory (string directory) {
-            string home = Environment.get_home_dir ();
-            if (directory == home) return "~";
-            if (directory.has_prefix (home + "/")) return "~" + directory.substring (home.length);
-            return directory;
-        }
-
         private Gtk.Revealer create_composer () {
             compose_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
             compose_box.add_css_class ("shadow-composer");
@@ -347,7 +338,9 @@ namespace Shadow {
             recall_button.sensitive = false;
             menu_item (tools, popover, "Find in Composer", "Ctrl+F", () => open_search (true));
             menu_item (tools, popover, "Paste into Terminal", "Ctrl+Shift+Enter", paste_draft);
-            menu_item (tools, popover, "Refresh Repository", "", () => repository.refresh.begin (shell_cwd));
+            var context_options = new Gtk.Expander ("Context Information") {child = new ContextOptions (host.preferences)};
+            tools.append (context_options);
+            menu_item (tools, popover, "Refresh Repository", "", () => context_bar.refresh_repository ());
             preview = new RichInput () {editable = false, cursor_visible = false, reveal_active_line = false};
             var last_input = new Gtk.Expander ("Last Input") {child = new Gtk.ScrolledWindow () {
                 child = preview, max_content_height = 140, max_content_width = 480, propagate_natural_height = true}};
@@ -359,20 +352,10 @@ namespace Shadow {
             analysis.status.margin_start = 42;
             analysis.status.margin_end = 14;
             compose_box.append (analysis.status);
-            var context = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12) {margin_start = 42, margin_end = 14, margin_bottom = 10};
-            context.add_css_class ("composer-context");
-            directory_label = new Gtk.Label (compact_directory (shell_cwd)) {
-                xalign = 0, hexpand = true, ellipsize = Pango.EllipsizeMode.MIDDLE, tooltip_text = shell_cwd};
-            directory_label.add_css_class ("dim-label");
-            repository_label = new Gtk.Label ("") {ellipsize = Pango.EllipsizeMode.MIDDLE, max_width_chars = 36, visible = false};
-            repository_label.add_css_class ("dim-label");
-            repository.notify["summary"].connect (() => {
-                repository_label.label = repository.summary;
-                repository_label.visible = repository.summary != "";
-            });
-            repository.notify["detail"].connect (() => { repository_label.tooltip_text = repository.detail; });
-            context.append (directory_label); context.append (repository_label);
-            compose_box.append (context);
+            context_bar = new ContextBar (host.preferences, shell_cwd);
+            compose_box.append (context_bar);
+            compose_box.map.connect (context_bar.refresh_repository);
+            compose_box.unmap.connect (context_bar.cancel);
             composer = new Gtk.Revealer () {child = compose_box, transition_duration = 0};
             composer.reveal_child = compose_button.active;
             compose_button.toggled.connect (() => {
@@ -434,6 +417,7 @@ namespace Shadow {
 
         private void refresh_input () {
             update_composer_visibility ();
+            context_bar.set_ready (input_session.ready);
             bool command_input = shell_editor && input_session.ready;
             fish_provider.enabled = command_input;
             if (analysis.enabled != command_input) analysis.enabled = command_input;
@@ -515,11 +499,11 @@ namespace Shadow {
             shell_cwd = directory;
             window.update_session (this);
             editor.working_directory = directory;
-            directory_label.label = compact_directory (directory);
-            directory_label.tooltip_text = directory;
-            repository.refresh.begin (directory);
+            context_bar.set_directory (directory);
             refresh_input ();
         }
+
+        public bool shell_context (string[] fields) { return context_bar.prompt.update (fields); }
 
         public void shell_metadata (string abbreviations, string completions, string paths, string functions) {
             assistance.dismiss ();
@@ -599,6 +583,7 @@ namespace Shadow {
             terminal.set_scrollback_lines ((long) host.preferences.scrollback);
             editor.set_editor_font (host.preferences.editor_font);
             preview.set_editor_font (host.preferences.editor_font);
+            context_bar.apply_preferences ();
             update_colors ();
         }
 
@@ -634,6 +619,9 @@ namespace Shadow {
             feedback_bar.visible = true;
             spawn_cancel = new Cancellable ();
             input_session.reset ();
+            // A restarted shell must not inherit the previous process's result
+            // or environment snapshot before it reports its own prompt.
+            context_bar.prompt.update ({"0", "0", "0", "0", "", "", "0", "0", "", ""});
             // Remove parent-terminal identity so children discover this VTE,
             // rather than sending Kitty-specific control to the outer terminal.
             string[] env = environment;
@@ -704,7 +692,7 @@ namespace Shadow {
             closing = true;
             window.session_closing (this);
             assistance.dismiss ();
-            repository.cancel ();
+            context_bar.cancel ();
             analysis.cancel ();
             input_session.reset ();
             visible = false;
@@ -714,7 +702,7 @@ namespace Shadow {
         }
 
         private void finish () {
-            repository.cancel ();
+            context_bar.cancel ();
             analysis.cancel ();
             terminal_context.close ();
             if (theme_handler != 0) { desktop_settings.disconnect (theme_handler); theme_handler = 0; }

@@ -24,6 +24,12 @@ namespace Shadow {
             window.shell_metadata (abbreviations, completions, paths, functions);
         }
 
+        public void prompt_context (string session, string token, int pid, string[] fields) throws DBusError, IOError {
+            var window = host.shell_window (session, pid);
+            if (token != window.input_session.token) throw new IOError.PERMISSION_DENIED ("Expired shell identity");
+            if (!window.shell_context (fields)) throw new IOError.INVALID_DATA ("Invalid prompt context snapshot");
+        }
+
         public void report (string session, string token, int pid, string phase, string detail) throws DBusError, IOError {
             var window = host.shell_window (session, pid);
             window.input_session.report (token, phase, detail);

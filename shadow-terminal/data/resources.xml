@@ -1,5 +1,6 @@
 <gresources>
   <gresource prefix="/io/github/visrosa/Vibrant/ShadowTerm">
     <file>icons/scalable/apps/io.github.visrosa.Vibrant.ShadowTerm.svg</file>
+    <file>icons/scalable/actions/shadow-branch-symbolic.svg</file>
   </gresource>
 </gresources>

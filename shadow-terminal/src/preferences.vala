@@ -9,6 +9,10 @@ namespace Shadow {
         public string foreground = "#eeeeec";
         public string background = "#20242b";
         public double header_opacity_boost = 0;
+        public const string[] CONTEXT_KEYS = {"enabled", "directory", "git", "result", "duration", "environment", "identity", "jobs"};
+        public const string[] CONTEXT_LABELS = {"Show context information", "Working directory", "Git branch and changes",
+            "Last command result", "Command duration", "Python / Conda environment", "User and host", "Background jobs"};
+        private bool[] context_flags = {true, true, true, true, true, true, false, true};
         public signal void changed ();
         private string filename;
 
@@ -31,6 +35,32 @@ namespace Shadow {
                 double value = file.get_double ("appearance", "header-opacity-boost");
                 if (value.is_finite ()) header_opacity_boost = double.max (0, double.min (1, value));
             } catch (Error error) {}
+            for (int i = 0; i < CONTEXT_KEYS.length; i++) {
+                try { context_flags[i] = file.get_boolean ("context", CONTEXT_KEYS[i]); } catch (Error error) {}
+            }
+        }
+
+        public bool context_visible (string key) {
+            for (int i = 0; i < CONTEXT_KEYS.length; i++) if (CONTEXT_KEYS[i] == key) return context_flags[i];
+            return false;
+        }
+
+        public void set_context_visible (string key, bool visible) throws Error {
+            for (int i = 0; i < CONTEXT_KEYS.length; i++) {
+                if (CONTEXT_KEYS[i] != key) continue;
+                if (context_flags[i] == visible) return;
+                context_flags[i] = visible;
+                changed ();
+                save ();
+                return;
+            }
+            throw new IOError.INVALID_ARGUMENT ("Unknown context item");
+        }
+
+        public void reset_context () throws Error {
+            context_flags = {true, true, true, true, true, true, false, true};
+            changed ();
+            save ();
         }
 
         private static string valid_color (string value, string fallback) {
@@ -80,6 +110,10 @@ namespace Shadow {
             this.background = valid_color (background, this.background);
             this.header_opacity_boost = header_opacity_boost.is_finite () ? double.max (0, double.min (1, header_opacity_boost)) : 0;
             changed ();
+            save ();
+        }
+
+        private void save () throws Error {
             var file = new KeyFile ();
             file.set_string ("appearance", "terminal-font", terminal_font);
             file.set_string ("appearance", "editor-font", editor_font);
@@ -90,9 +124,50 @@ namespace Shadow {
             file.set_string ("appearance", "foreground", this.foreground);
             file.set_string ("appearance", "background", this.background);
             file.set_double ("appearance", "header-opacity-boost", this.header_opacity_boost);
+            for (int i = 0; i < CONTEXT_KEYS.length; i++) file.set_boolean ("context", CONTEXT_KEYS[i], context_flags[i]);
             if (DirUtils.create_with_parents (Path.get_dirname (filename), 0700) != 0)
                 throw new IOError.FAILED ("Could not create the preferences directory");
             FileUtils.set_contents (filename, file.to_data ());
+        }
+    }
+
+    // Menus and Preferences share the same persisted options. Subscribe only
+    // while mapped so hidden/closed option views do not retain session widgets.
+    public class ContextOptions : Gtk.Box {
+        private weak Preferences settings;
+        private Gtk.CheckButton[] controls = {};
+        private Gtk.Label status;
+        private bool updating = false;
+        private ulong handler = 0;
+
+        public ContextOptions (Preferences settings) {
+            Object (orientation: Gtk.Orientation.VERTICAL, spacing: 6);
+            this.settings = settings;
+            for (int i = 0; i < Preferences.CONTEXT_KEYS.length; i++) {
+                string key = Preferences.CONTEXT_KEYS[i];
+                var control = new Gtk.CheckButton.with_label (Preferences.CONTEXT_LABELS[i]);
+                control.toggled.connect (() => {
+                    if (updating) return;
+                    try { settings.set_context_visible (key, control.active); status.label = ""; }
+                    catch (Error error) { status.label = "Applied; could not save: " + error.message; }
+                });
+                controls += control;
+                append (control);
+            }
+            status = new Gtk.Label ("") {xalign = 0, wrap = true};
+            append (status);
+            sync ();
+            map.connect (() => { if (handler == 0) handler = settings.changed.connect (sync); sync (); });
+            unmap.connect (() => { if (handler != 0) { settings.disconnect (handler); handler = 0; } });
+        }
+
+        private void sync () {
+            updating = true;
+            for (int i = 0; i < controls.length; i++) {
+                controls[i].active = settings.context_visible (Preferences.CONTEXT_KEYS[i]);
+                controls[i].sensitive = i == 0 || settings.context_visible ("enabled");
+            }
+            updating = false;
         }
     }
 
@@ -149,9 +224,10 @@ namespace Shadow {
                 grid.attach (label, 0, i); grid.attach (controls[i], 1, i);
             }
             grid.attach (new Gtk.Label ("Transparency depends on compositor support.") {xalign = 0, wrap = true}, 0, 9, 2);
-            grid.attach (status, 0, 10, 2);
+            grid.attach (new Gtk.Expander ("Composer Context") {child = new ContextOptions (settings)}, 0, 10, 2);
+            grid.attach (status, 0, 11, 2);
             var reset = new Gtk.Button.with_label ("Restore Defaults") {halign = Gtk.Align.START};
-            grid.attach (reset, 0, 11, 2);
+            grid.attach (reset, 0, 12, 2);
             set_child (grid);
             terminal.notify["font-desc"].connect (schedule_apply);
             editor.notify["font-desc"].connect (schedule_apply);
@@ -178,6 +254,7 @@ namespace Shadow {
                 reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b");
                 foreground.rgba = reset_fg; background.rgba = reset_bg;
                 header_boost.set_value (0);
+                try { settings.reset_context (); } catch (Error error) { status.label = error.message; }
                 updating = false;
                 schedule_apply ();
             });
