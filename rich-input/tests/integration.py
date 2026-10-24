@@ -29,7 +29,11 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="rich-input-test-") as directory:
         tmp = Path(directory)
-        (tmp / "config").mkdir()
+        for home in ("config", "data", "cache", "state"):
+            (tmp / home).mkdir()
+        compose = tmp / "config/gtk-4.0/Compose"
+        compose.parent.mkdir()
+        compose.write_text('<Multi_key> <apostrophe> <e> : "é" U00E9\n')
         # No service directories: a test settings lookup must not autostart
         # desktop portals, file managers or other unrelated session services.
         bus_config = tmp / "bus.conf"
@@ -58,8 +62,17 @@ def main():
                                 "GIO_USE_VFS": "local", "GTK_USE_PORTAL": "0",
                                 "PATH": str(tmp) + os.pathsep + os.environ["PATH"],
                                 "XDG_CONFIG_HOME": str(tmp / "config"),
+                                "XDG_DATA_HOME": str(tmp / "data"),
+                                "XDG_CACHE_HOME": str(tmp / "cache"),
+                                "XDG_STATE_HOME": str(tmp / "state"),
+                                "fish_history": "vcom_fixture",
                                 "ARGV_CAPTURE": str(tmp / "argv.json"),
                                 "CLAUDEVASSAL_CACHE_DIR": str(tmp / "cache")}
+            # Exercise real fish persistence using the same fixture environment.
+            # The broker's noninteractive read protocol need not write history.
+            subprocess.run(["fish", "--no-config", "-c",
+                            "builtin history append -- vcom-fixture-history; builtin history save"],
+                           env=env, check=True, timeout=4)
             # A private D-Bus session prevents the test app from touching the
             # desktop's existing application/settings services.
             with open(tmp / "broker.log", "wb") as log:
@@ -118,6 +131,11 @@ def main():
             broker.wait(timeout=5)
             log = (tmp / "broker.log").read_text(errors="replace")
             assert "CRITICAL" not in log and "Traceback" not in log, log
+            # Verify the namespace by its on-disk write, rather than assuming
+            # that redirecting configuration also isolates interactive history.
+            history = tmp / "data/fish/vcom_fixture_history"
+            assert history.exists(), "Missing isolated fish history"
+            assert b"vcom-fixture-history" in history.read_bytes(), history.read_text()
             print("GTK -> broker -> fish -> Claude argv/cache: exact source preserved")
         except Exception as error:
             log_path = tmp / "broker.log"
