@@ -1,0 +1,5 @@
+namespace Shadow {
+    internal const string SHELL_HELPER_PATH = @SHELL_HELPER_PATH@;
+    internal const string FISH_INTEGRATION_PATH = @FISH_INTEGRATION_PATH@;
+    internal const bool PRIVATE_VTE = @PRIVATE_VTE@;
+}

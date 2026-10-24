@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.log
+*~
+*.swp
+*.swo
+.env
+.env.*
+.vscode/
+
+# Local workspace context.
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+CLAUDE.local.md
+TODO.md
+TODO/
+DESIGN.md
+.claude/
