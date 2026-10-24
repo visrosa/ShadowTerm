@@ -14,10 +14,16 @@ int main (string[] args) {
     Test.init (ref args);
     Test.add_func ("/fish-services/live-completion-definitions-and-literal-source", () => {
         var provider = new Shadow.FishProvider ();
-        provider.configure ("", "complete -c vcomfixture -f -l feature -d 'Fixture option'\n", "", "");
-        var items = complete (provider, "vcomfixture --fea", "/tmp");
+        provider.configure ("", "complete -c vcomfixture -f -l feature -d 'Fixture option'\n" +
+            "complete -c vcomfixture -f -l feedback -d '日本語 <literal description>'\n" +
+            "complete -c vcomfixture -f -l plain\n", "", "");
+        var items = complete (provider, "vcomfixture --featu", "/tmp");
         assert (items.length == 1 && items[0].insertion == "--feature");
         assert (items[0].detail == "Fixture option");
+        items = complete (provider, "vcomfixture --feedb", "/tmp");
+        assert (items.length == 1 && items[0].detail == "日本語 <literal description>");
+        items = complete (provider, "vcomfixture --pla", "/tmp");
+        assert (items.length == 1 && items[0].detail == "Fish completion");
         // Draft substitution syntax must never be executed by a query worker.
         string marker = "/tmp/vcom-no-eval-" + Uuid.string_random ();
         assert (complete (provider, "echo (touch " + marker + ") ./fi", "/tmp").length == 0);

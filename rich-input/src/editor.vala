@@ -22,6 +22,18 @@ public class RichInput : Gtk.TextView {
     private string analyzed_source = "";
     private Gtk.CssProvider font_css = new Gtk.CssProvider ();
 
+    protected override void dispose () {
+        // TextView does not own the layout of manually parented native popups.
+        // Release these accessories before GTK checks for remaining children.
+        var child = get_first_child ();
+        while (child != null) {
+            var next = child.get_next_sibling ();
+            if (child is Gtk.Popover) child.unparent ();
+            child = next;
+        }
+        base.dispose ();
+    }
+
     public RichInput () {
         wrap_mode = Gtk.WrapMode.WORD_CHAR;
         left_margin = right_margin = 18;

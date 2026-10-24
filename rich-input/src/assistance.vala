@@ -1,7 +1,7 @@
 // The controller is consumer-neutral: providers receive snapshots, never a PTY
 // or permission to submit commands. Accepting a candidate is one undoable edit.
 public class ComposerAssist : Object {
-    public Gtk.Revealer panel;
+    public Gtk.Popover panel;
     private weak RichInput editor;
     private Gtk.ListBox list;
     private Gtk.Label detail;
@@ -11,24 +11,36 @@ public class ComposerAssist : Object {
     private VCom.CompletionContext? snapshot;
     private Cancellable? pending;
     private uint generation = 0;
-    public bool visible { get { return panel.reveal_child; } }
+    public bool visible { get { return panel.visible; } }
 
     public ComposerAssist (RichInput editor) {
         this.editor = editor;
         providers += new VCom.BuiltinProvider ();
         providers += new VCom.LocalFilesProvider ();
         list = new Gtk.ListBox () {selection_mode = Gtk.SelectionMode.SINGLE, focusable = false};
-        list.row_selected.connect ((row) => {
-            if (row != null && row.get_index () < items.length) detail.label = items[row.get_index ()].detail;
-        });
         list.row_activated.connect ((row) => accept (row.get_index ()));
         detail = new Gtk.Label ("") {xalign = 0, wrap = true, margin_start = 12, margin_end = 12, margin_bottom = 6};
-        var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 4);
-        body.append (new Gtk.Label ("Suggestions · Enter/Tab inserts · Escape closes") {xalign = 0, margin_start = 12});
-        scroll = new Gtk.ScrolledWindow () {child = list, max_content_height = 120, propagate_natural_height = true};
+        var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 6);
+        var hint = new Gtk.Label ("Enter/Tab inserts · Escape closes") {
+            xalign = 0, margin_start = 12, margin_end = 12, ellipsize = Pango.EllipsizeMode.END};
+        hint.add_css_class ("dim-label");
+        body.append (hint);
+        scroll = new Gtk.ScrolledWindow () {child = list, max_content_height = 240,
+            propagate_natural_height = true, hscrollbar_policy = Gtk.PolicyType.NEVER, focusable = false};
         body.append (scroll);
         body.append (detail);
-        panel = new Gtk.Revealer () {child = body, transition_duration = 0};
+        // A nonmodal native popup leaves typing and IME ownership in the editor.
+        // It is parented for coordinates/lifetime, never appended to host layout.
+        panel = new Gtk.Popover () {child = body, autohide = false, has_arrow = false,
+            position = Gtk.PositionType.TOP, halign = Gtk.Align.START, focusable = false};
+        panel.add_css_class ("composer-suggestions");
+        panel.set_parent (editor);
+        var focus = new Gtk.EventControllerFocus ();
+        focus.leave.connect (dismiss);
+        editor.add_controller (focus);
+        var scrolling = new Gtk.EventControllerScroll (Gtk.EventControllerScrollFlags.BOTH_AXES);
+        scrolling.scroll.connect (() => { dismiss (); return false; });
+        editor.add_controller (scrolling);
         editor.buffer.changed.connect (dismiss);
         editor.buffer.mark_set.connect ((iter, mark) => {
             if (mark == editor.buffer.get_insert () && snapshot != null && iter.get_offset () != snapshot.cursor) dismiss ();
@@ -36,6 +48,22 @@ public class ComposerAssist : Object {
         editor.notify["fish-mode"].connect (dismiss);
         editor.notify["working-directory"].connect (dismiss);
         editor.unmap.connect (dismiss);
+    }
+
+    private void show () {
+        if (!editor.get_mapped ()) return;
+        Gtk.TextIter cursor;
+        editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
+        Gdk.Rectangle location;
+        editor.get_iter_location (cursor, out location);
+        editor.buffer_to_window_coords (Gtk.TextWindowType.WIDGET, location.x, location.y,
+            out location.x, out location.y);
+        panel.set_pointing_to (location);
+        // Bound long candidates to the host rather than their natural text width.
+        int width = int.min (560, int.max (160, ((Gtk.Widget) editor.get_root ()).get_width () - 32));
+        panel.child.width_request = width;
+        panel.popup ();
+        editor.grab_focus ();
     }
 
     public void add_provider (VCom.CompletionProvider provider) { providers += provider; }
@@ -63,7 +91,7 @@ public class ComposerAssist : Object {
         generation++;
         if (pending != null) pending.cancel ();
         pending = null; snapshot = null;
-        panel.reveal_child = false;
+        panel.popdown ();
     }
 
     public bool handle_key (uint key, Gdk.ModifierType state) {
@@ -110,7 +138,7 @@ public class ComposerAssist : Object {
 
     public async void request (bool insert_unique = false) {
         dismiss ();
-        if (!editor.editable || editor.buffer.has_selection) return;
+        if (!editor.editable || editor.buffer.has_selection || !editor.get_mapped ()) return;
         Gtk.TextIter cursor;
         editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
         var context = new VCom.CompletionContext (editor.source (), cursor.get_offset (), editor.fish_mode, editor.working_directory);
@@ -120,7 +148,8 @@ public class ComposerAssist : Object {
         items = {};
         while (list.get_first_child () != null) list.remove (list.get_first_child ());
         detail.label = "Looking for suggestions…";
-        panel.reveal_child = true;
+        detail.visible = true;
+        show ();
         uint version = generation;
         uint deadline = Timeout.add (1500, () => { cancel.cancel (); return Source.REMOVE; });
         VCom.CompletionItem[] results = {};
@@ -142,13 +171,22 @@ public class ComposerAssist : Object {
         items = results; snapshot = context;
         foreach (var item in items) {
             var row = new Gtk.ListBoxRow () {focusable = false};
-            row.child = new Gtk.Label (item.label) {xalign = 0, margin_start = 12, margin_end = 12,
-                ellipsize = Pango.EllipsizeMode.END};
+            var content = new Gtk.Box (Gtk.Orientation.VERTICAL, 2) {
+                margin_start = 12, margin_end = 12, margin_top = 5, margin_bottom = 5};
+            content.append (new Gtk.Label (item.label) {xalign = 0, ellipsize = Pango.EllipsizeMode.END,
+                tooltip_text = item.label});
+            var description = new Gtk.Label (item.detail) {xalign = 0, ellipsize = Pango.EllipsizeMode.END,
+                visible = item.detail != "", tooltip_text = item.detail};
+            description.add_css_class ("dim-label");
+            description.add_css_class ("caption");
+            content.append (description);
+            row.child = content;
             list.append (row);
         }
         detail.label = items.length == 0 ? "No suggestions for this context" : "";
+        detail.visible = items.length == 0;
         if (items.length > 0) list.select_row (list.get_row_at_index (0));
-        panel.reveal_child = true;
+        show ();
         if (insert_unique && items.length == 1) accept (0);
     }
 

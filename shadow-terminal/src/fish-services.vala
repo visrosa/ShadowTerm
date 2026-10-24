@@ -116,7 +116,9 @@ namespace Shadow {
                 int tab = line.index_of_char ('\t');
                 string insertion = tab < 0 ? line : line.substring (0, tab);
                 // --escape provides fish source, including literal filenames.
-                items += new VCom.CompletionItem (context, insertion, insertion, tab < 0 ? "Fish completion" : line.substring (tab + 1));
+                string description = tab < 0 ? "" : line.substring (tab + 1);
+                items += new VCom.CompletionItem (context, insertion, insertion,
+                    description == "" ? "Fish completion" : description);
             }
             return items;
         }

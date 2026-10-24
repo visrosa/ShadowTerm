@@ -356,7 +356,6 @@ namespace Shadow {
             popover.child = tools; options.popover = popover;
             row.append (cancel_button); row.append (submit_button); row.append (options);
             compose_box.append (row);
-            compose_box.append (assistance.panel);
             analysis.status.margin_start = 42;
             analysis.status.margin_end = 14;
             compose_box.append (analysis.status);

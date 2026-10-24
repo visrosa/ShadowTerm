@@ -58,7 +58,6 @@ public class Composer : Gtk.Application {
         header.pack_end (suggest);
         prompt.append (prompt_label);
         prompt.append (edit_scroll);
-        prompt.append (assistance.panel);
         var paned = new Gtk.Paned (Gtk.Orientation.VERTICAL) {
             start_child = shadow_scroll, end_child = prompt, position = 410,
             resize_start_child = true, resize_end_child = true, vexpand = true

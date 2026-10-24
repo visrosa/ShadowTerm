@@ -13,6 +13,26 @@ private class DelayedProvider : VCom.CompletionProvider {
     }
 }
 
+private class DescribedProvider : VCom.CompletionProvider {
+    public override async VCom.CompletionItem[] complete (VCom.CompletionContext context, Cancellable cancel) throws Error {
+        VCom.CompletionItem[] items = {};
+        for (int i = 0; i < 12; i++) {
+            items += new VCom.CompletionItem (context, "candidate-%d".printf (i), "value-%d".printf (i),
+                "Description %d · 日本語 · <literal markup> ".printf (i) + string.nfill (100, 'x'));
+        }
+        return items;
+    }
+}
+
+private Gtk.ListBox? suggestion_list (Gtk.Widget widget) {
+    if (widget is Gtk.ListBox) return (Gtk.ListBox) widget;
+    for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
+        var list = suggestion_list (child);
+        if (list != null) return list;
+    }
+    return null;
+}
+
 void main (string[] args) {
     Gtk.init ();
     Test.init (ref args);
@@ -97,7 +117,7 @@ void main (string[] args) {
         var assistance = new ComposerAssist (editor);
         assistance.add_provider (new DelayedProvider ());
         var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
-        body.append (editor); body.append (assistance.panel);
+        body.append (editor);
         var window = new Gtk.Window () {child = body, title = "Isolated editor test"};
         window.present ();
         spin (20);
@@ -125,6 +145,56 @@ void main (string[] args) {
         assert (editor.source () == "zebra");
         editor.buffer.undo ();
         assert (editor.source () == "z");
+        window.destroy ();
+    });
+    Test.add_func ("/editor/floating-descriptions-layout-focus-and-selection", () => {
+        var editor = new RichInput () {fish_mode = true};
+        var assistance = new ComposerAssist (editor);
+        assistance.set_provider (new DescribedProvider ());
+        var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+        var output = new Gtk.DrawingArea () {vexpand = true};
+        body.append (output);
+        body.append (new Gtk.ScrolledWindow () {child = editor, min_content_height = 56,
+            max_content_height = 56, propagate_natural_height = true});
+        var other = new Gtk.Button.with_label ("Other focus target");
+        body.append (other);
+        var window = new Gtk.Window () {child = body, default_width = 380, default_height = 480};
+        window.present ();
+        editor.grab_focus ();
+        editor.buffer.text = "draft";
+        spin (30);
+        int editor_height = editor.get_height (), output_height = output.get_height ();
+        assistance.request.begin ();
+        spin (80);
+        assert (assistance.visible && assistance.panel.get_mapped () && editor.has_focus);
+        assert (assistance.panel.get_parent () == editor);
+        assert (editor.get_height () == editor_height && output.get_height () == output_height);
+        assert (assistance.panel.get_width () <= window.get_width ());
+        var list = suggestion_list (assistance.panel);
+        assert (list != null);
+        for (int i = 0; i < 12; i++) {
+            var content = list.get_row_at_index (i).child;
+            var label = (Gtk.Label) content.get_first_child ();
+            var description = (Gtk.Label) label.get_next_sibling ();
+            assert (label.label == "candidate-%d".printf (i));
+            assert (description.visible && description.label.has_prefix ("Description %d · 日本語 · <literal markup>".printf (i)));
+            assert (!description.use_markup && description.tooltip_text == description.label);
+        }
+        assert (assistance.handle_key (Gdk.Key.Page_Down, 0));
+        assert (list.get_selected_row ().get_index () == 5);
+        assert (assistance.handle_key (Gdk.Key.Tab, 0));
+        assert (editor.source () == "value-5" && !assistance.visible);
+        editor.buffer.undo ();
+        assert (editor.source () == "draft");
+        assistance.request.begin ();
+        spin (30);
+        assert (assistance.handle_key (Gdk.Key.Escape, 0));
+        assert (!assistance.visible && editor.has_focus && editor.source () == "draft");
+        assistance.request.begin ();
+        spin (30);
+        other.grab_focus ();
+        spin (30);
+        assert (!assistance.visible && editor.source () == "draft");
         window.destroy ();
     });
     Test.run ();
