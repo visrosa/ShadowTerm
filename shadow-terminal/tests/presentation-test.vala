@@ -40,6 +40,15 @@ private Gtk.Button? find_button (Gtk.Widget widget, string label) {
     return null;
 }
 
+private Gtk.ListBox? find_suggestions (Gtk.Widget widget) {
+    if (widget is Gtk.ListBox) return (Gtk.ListBox) widget;
+    for (var child = widget.get_first_child (); child != null; child = child.get_next_sibling ()) {
+        var result = find_suggestions (child);
+        if (result != null) return result;
+    }
+    return null;
+}
+
 private string run_private (string[] command) throws Error {
     string output;
     int status;
@@ -79,6 +88,49 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/floating-completion-pointer-and-scroll", () => {
+        try {
+            var editor = new RichInput ();
+            var assistance = new ComposerAssist (editor);
+            var body = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            body.append (new Gtk.DrawingArea () {vexpand = true});
+            body.append (new Gtk.ScrolledWindow () {child = editor, min_content_height = 56,
+                max_content_height = 56, propagate_natural_height = true});
+            var window = new Gtk.Window () {child = body, title = "Private floating completions",
+                default_width = 640, default_height = 480};
+            window.present ();
+            settle ();
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Private floating completions$"});
+            run_private ({"xdotool", "windowfocus", "--sync", wid});
+            editor.grab_focus ();
+            assistance.request.begin ();
+            settle ();
+            var list = find_suggestions (assistance.panel);
+            assert (list != null && list.get_row_at_index (5) != null);
+            var popup = (Gdk.Popup) assistance.panel.get_surface ();
+            assert (popup.get_parent () == window.get_surface ());
+            Graphene.Point point = {}, target;
+            point.x = 24; point.y = 10;
+            assert (list.get_row_at_index (1).compute_point (assistance.panel, point, out target));
+            double dx, dy;
+            assistance.panel.get_surface_transform (out dx, out dy);
+            string x = ((int) (popup.get_position_x () + target.x - dx)).to_string ();
+            string y = ((int) (popup.get_position_y () + target.y - dy)).to_string ();
+            var scroll = (Gtk.ScrolledWindow) list.get_ancestor (typeof (Gtk.ScrolledWindow));
+            run_private ({"xdotool", "mousemove", "--window", wid, x, y, "click", "5"});
+            settle ();
+            assert (assistance.visible && scroll.vadjustment.value > 0);
+            scroll.vadjustment.value = 0;
+            settle ();
+            run_private ({"import", "-window", "root", "/tmp/shadow-term-suggestions.png"});
+            run_private ({"xdotool", "mousemove", "--window", wid, x, y, "click", "1"});
+            settle ();
+            assert (!assistance.visible && editor.source () == "`code`" && editor.has_focus);
+            editor.buffer.undo ();
+            assert (editor.source () == "");
+            window.destroy ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/live-style-source-and-compact-layout", () => {
         try {
             var host = new Shadow.Host ();
