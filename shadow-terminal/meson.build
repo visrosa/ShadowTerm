@@ -1,4 +1,4 @@
-project('shadow-term', 'vala', 'c', version: '0.0.7')
+project('shadow-term', 'vala', 'c', version: '0.0.8')
 
 private_vte = get_option('vte-library-dir')
 if private_vte != '' and not import('fs').is_file(private_vte / 'libvte-2.91-gtk4.so')

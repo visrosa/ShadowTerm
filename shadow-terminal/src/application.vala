@@ -32,6 +32,12 @@ namespace Shadow {
         private string submitted_source = "";
         private string last_source = "";
         private bool enter_submission = false;
+        private string[] history_entries = {};
+        private string[] history_matches = {};
+        private int history_index = -1;
+        private string history_draft = "";
+        private int history_cursor = 0;
+        private bool history_edit = false;
         private bool previous_ready = false;
         private uint input_epoch = 0;
         private bool forwarding_key = false;
@@ -49,6 +55,7 @@ namespace Shadow {
         private Gtk.Label search_status;
         private Gtk.Window? preferences_window;
         private ulong preferences_handler;
+        private string applied_font_signature = "";
         private bool presentation_dirty = false;
         private Gtk.Box feedback_bar;
         private Gtk.Box compose_box;
@@ -63,7 +70,7 @@ namespace Shadow {
         public Gtk.MenuButton menu;
         public string title { get; set; }
         public bool is_active { get { return window.is_active && window.active_session == this; } }
-        public bool is_presented { get { return window.visible && window.active_session == this; } }
+        public bool is_presented { get { return window.contains_visible (this); } }
         public string directory { get { return shell_cwd; } }
         public signal void ended ();
 
@@ -73,7 +80,7 @@ namespace Shadow {
             this.host = owner;
             this.request = config;
             shell_cwd = config.cwd;
-            shell_editor = request.composer_enabled ();
+            shell_editor = request.supports_composer ();
             this.environment = environment;
             add_css_class ("shadow-terminal");
             title = "%s · %s".printf (request.title, request.session);
@@ -163,10 +170,10 @@ namespace Shadow {
                         return handled;
                     }
                 }
-                if (editor.has_focus && key == Gdk.Key.h && (state & Gdk.ModifierType.ALT_MASK) != 0) {
-                    show_documentation (); return true;
-                }
                 if (editor.has_focus && assistance.handle_key (key, state)) return true;
+                if (editor.has_focus && shell_editor && input_session.ready && !input_session.pending &&
+                    (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == 0 &&
+                    (key == Gdk.Key.Up || key == Gdk.Key.Down) && navigate_history (key == Gdk.Key.Up)) return true;
                 if (editor.has_focus && key == Gdk.Key.Return &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK &&
                     !input_session.pending && (!shell_editor || !input_session.ready)) { paste_draft (); return true; }
@@ -194,14 +201,6 @@ namespace Shadow {
                     }
                     if (lower == Gdk.Key.d && editor.source () == "" && !input_session.pending) { terminal.feed_child ("\x04".data); return true; }
                 }
-                if (key == Gdk.Key.F1 && editor.has_focus) { show_shortcuts (); return true; }
-                if ((state & Gdk.ModifierType.CONTROL_MASK) != 0 && key == Gdk.Key.comma) {
-                    show_preferences (); return true;
-                }
-                if ((state & Gdk.ModifierType.CONTROL_MASK) != 0 && Gdk.keyval_to_lower (key) == Gdk.Key.f &&
-                    (editor.has_focus || (state & Gdk.ModifierType.SHIFT_MASK) != 0)) {
-                    open_search (editor.has_focus && (state & Gdk.ModifierType.SHIFT_MASK) == 0); return true;
-                }
                 if (key == Gdk.Key.Escape && editor.has_focus && input_session.pending) {
                     input_session.reject ("Submission cancelled; draft retained");
                     return true;
@@ -213,34 +212,12 @@ namespace Shadow {
                     submit_command ((state & Gdk.ModifierType.CONTROL_MASK) == 0);
                     return true;
                 }
-                if ((state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) !=
-                    (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)) return false;
-                switch (Gdk.keyval_to_lower (key)) {
-                case Gdk.Key.c:
-                    if (editor.has_focus) {
-                        Gtk.TextIter start, end;
-                        if (editor.buffer.get_selection_bounds (out start, out end))
-                            get_clipboard ().set_text (editor.buffer.get_text (start, end, true));
-                    } else terminal_context.copy_selection ();
-                    return true;
-                case Gdk.Key.v: paste_clipboard (); return true;
-                case Gdk.Key.n: host.new_terminal (shell_cwd); return true;
-                case Gdk.Key.w: end_session (); return true;
-                case Gdk.Key.h: hide_session (); return true;
-                case Gdk.Key.m: compose_button.active = !compose_button.active; return true;
-                case Gdk.Key.Return: paste_draft (); return true;
-                case Gdk.Key.l:
-                    if (editor.source () == "") editor.buffer.text = last_source;
-                    compose_button.active = true; editor.grab_focus (); return true;
-                case Gdk.Key.plus: case Gdk.Key.equal:
-                    terminal.font_scale = double.min (3, terminal.font_scale + 0.1); return true;
-                case Gdk.Key.minus: case Gdk.Key.underscore:
-                    terminal.font_scale = double.max (0.5, terminal.font_scale - 0.1); return true;
-                case Gdk.Key.@0: case Gdk.Key.parenright: terminal.font_scale = 1; return true;
-                }
                 return false;
             });
             ((Gtk.Widget) this).add_controller (keys);
+            var focus = new Gtk.EventControllerFocus ();
+            focus.enter.connect (() => { if (!closing) window.activate_session (this); });
+            add_controller (focus);
             notify["title"].connect (() => window.update_session (this));
             terminal.termprop_changed.connect ((prop) => {
                 if (prop != Vte.TERMPROP_XTERM_TITLE) return;
@@ -262,10 +239,17 @@ namespace Shadow {
                     feedback_bar.visible = true;
                 }
             });
-            editor.buffer.changed.connect (refresh_input);
+            editor.buffer.changed.connect (() => {
+                if (!history_edit) history_index = -1;
+                refresh_input ();
+            });
             input_session.changed.connect (refresh_input);
             input_session.accepted.connect ((source_text) => {
                 last_source = source_text;
+                history_index = -1;
+                string[] recent = {source_text};
+                foreach (var entry in history_entries) if (entry != source_text && recent.length < 200) recent += entry;
+                history_entries = recent;
                 preview.fish_mode = editor.fish_mode;
                 preview.dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
                 preview.buffer.text = source_text;
@@ -308,7 +292,7 @@ namespace Shadow {
             menu_item (box, popover, "New Window", "Ctrl+Shift+N", () => host.new_terminal (shell_cwd));
             menu_item (box, popover, "Command Palette…", "Ctrl+Shift+P", show_palette);
             menu_item (box, popover, "Find in Terminal", "Ctrl+Shift+F", () => open_search (false));
-            compose_button = new Gtk.ToggleButton.with_label ("V Composer") {active = shell_editor,
+            compose_button = new Gtk.ToggleButton.with_label ("V Composer") {active = request.composer_enabled (),
                 tooltip_text = "Show Composer or use native terminal input (Ctrl+Shift+M)", has_frame = false};
             box.append (compose_button);
             weak Gtk.Popover header_popup = popover;
@@ -319,7 +303,13 @@ namespace Shadow {
             menu_item (box, popover, "Keyboard Shortcuts", "F1", show_shortcuts);
             box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
             menu_item (box, popover, "Hide Window", "Ctrl+Shift+H", hide_session);
-            menu_item (box, popover, "Close Tab", "Ctrl+W", end_session);
+            menu_item (box, popover, "Split Side by Side", "", () => window.dispatch_action ("split-horizontal"));
+            menu_item (box, popover, "Split Stacked", "", () => window.dispatch_action ("split-vertical"));
+            menu_item (box, popover, "Move Pane to New Tab", "", () => window.move_to_tab (this));
+            menu_item (box, popover, "Move Pane to New Window", "", () => host.detach_session (this));
+            menu_item (box, popover, "Move Previous Tab into Split", "", () => window.join_previous_tab ());
+            menu_item (box, popover, "Close Pane", "Ctrl+W", end_session);
+            menu_item (box, popover, "Close Tab", "Ctrl+Shift+W", () => window.close_tab ());
             menu_item (box, popover, "Close Window", "Ctrl+Shift+Q", () => window.close_workspace ());
             popover.child = box; menu.popover = popover;
             return menu;
@@ -433,20 +423,22 @@ namespace Shadow {
                 shortcuts_window.titlebar = new Gtk.HeaderBar ();
                 var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {margin_start = 24, margin_end = 24, margin_top = 18, margin_bottom = 24};
                 var grid = new Gtk.Grid () {column_spacing = 36, row_spacing = 10};
-                string[] actions = {"Run command / New line", "Run without adding a line", "Suggestions", "Composer / Native input",
-                    "Recall last input", "Find in Composer / Terminal", "Copy / Paste terminal text", "Paste Composer source into terminal",
-                    "New tab / Tab in default directory", "New window", "Close tab / Close window", "Previous / Next tab", "Command palette", "Hide window", "Preferences", "Bold / Italic / Code (Markdown)", "Zoom in / Out / Reset"};
-                string[] shortcuts = {"Enter / Shift+Enter", "Ctrl+Enter", "Ctrl+Space", "Ctrl+Shift+M", "Ctrl+Shift+L",
-                    "Ctrl+F / Ctrl+Shift+F", "Ctrl+Shift+C / V", "Ctrl+Shift+Enter", "Ctrl+T / N", "Ctrl+Shift+N", "Ctrl+W / Ctrl+Shift+Q",
-                    "Ctrl+Page Up / Down", "Ctrl+Shift+P", "Ctrl+Shift+H",
-                    "Ctrl+,", "Ctrl+B / I / `", "Ctrl+Shift+Plus / Minus / 0"};
-                for (int i = 0; i < actions.length; i++) {
-                    grid.attach (new Gtk.Label (actions[i]) {xalign = 0}, 0, i);
-                    grid.attach (new Gtk.Label (shortcuts[i]) {xalign = 1}, 1, i);
+                string[] core_actions = {"Run command / New line", "Run without adding a line", "Suggestions", "History older / Newer", "Bold / Italic / Code (Markdown)"};
+                string[] core_keys = {"Enter / Shift+Enter", "Ctrl+Enter", "Ctrl+Space", "Up / Down at draft boundary", "Ctrl+B / I / `"};
+                int row = 0;
+                for (int i = 0; i < core_actions.length; i++, row++) {
+                    grid.attach (new Gtk.Label (core_actions[i]) {xalign = 0}, 0, row);
+                    grid.attach (new Gtk.Label (core_keys[i]) {xalign = 1}, 1, row);
+                }
+                for (int i = 0; i < Preferences.ACTIONS.length; i++, row++) {
+                    grid.attach (new Gtk.Label (Preferences.ACTION_LABELS[i]) {xalign = 0}, 0, row);
+                    grid.attach (new Gtk.Label (host.preferences.shortcut_label (Preferences.ACTIONS[i])) {xalign = 1}, 1, row);
                 }
                 box.append (grid);
                 box.append (new Gtk.Label ("Foreground programs receive terminal input.\nSuggestions edit the draft; accepting one never runs it.") {xalign = 0});
-                shortcuts_window.child = box;
+                shortcuts_window.default_height = 620;
+                shortcuts_window.resizable = true;
+                shortcuts_window.child = new Gtk.ScrolledWindow () {child = box, hscrollbar_policy = Gtk.PolicyType.NEVER};
                 var keys = new Gtk.EventControllerKey ();
                 keys.key_pressed.connect ((key) => { if (key == Gdk.Key.Escape) { shortcuts_window.close (); return true; } return false; });
                 ((Gtk.Widget) shortcuts_window).add_controller (keys);
@@ -480,7 +472,7 @@ namespace Shadow {
             bool became_ready = input_session.ready && !previous_ready;
             bool became_busy = !input_session.ready && previous_ready;
             previous_ready = input_session.ready;
-            if (became_ready || became_busy) { input_epoch++; assistance.dismiss (); }
+            if (became_ready || became_busy) { input_epoch++; history_index = -1; assistance.dismiss (); }
             sync_presentation ();
             if (shell_editor) {
                 if (running) feedback_bar.visible = input_session.pending;
@@ -553,6 +545,47 @@ namespace Shadow {
             refresh_input ();
         }
 
+        public void shell_history (string[] entries) {
+            string[] bounded = {};
+            int bytes = 0;
+            foreach (var entry in entries) {
+                if (entry == "" || entry.length > 16384) continue;
+                bytes += entry.length;
+                if (bounded.length == 200 || bytes > 131072) break;
+                bounded += entry;
+            }
+            history_entries = bounded;
+        }
+
+        private bool navigate_history (bool older) {
+            if (editor.buffer.has_selection) return false;
+            Gtk.TextIter cursor;
+            editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
+            if (older ? cursor.get_line () != 0 : cursor.get_line () != editor.buffer.get_line_count () - 1) return false;
+            if (history_index < 0) {
+                if (!older) return false;
+                history_draft = editor.source ();
+                history_cursor = cursor.get_offset ();
+                history_matches = {};
+                foreach (var entry in history_entries)
+                    if (entry != history_draft && entry.has_prefix (history_draft)) history_matches += entry;
+                if (history_matches.length == 0) return true;
+                history_index = 0;
+            } else if (older) history_index = int.min (history_index + 1, history_matches.length - 1);
+            else history_index--;
+            history_edit = true;
+            editor.buffer.begin_user_action ();
+            Gtk.TextIter start, end;
+            editor.buffer.get_bounds (out start, out end);
+            editor.buffer.delete (ref start, ref end);
+            editor.buffer.insert_at_cursor (history_index < 0 ? history_draft : history_matches[history_index], -1);
+            editor.buffer.get_iter_at_offset (out cursor, history_index < 0 ? history_cursor : editor.buffer.get_char_count ());
+            editor.buffer.place_cursor (cursor);
+            editor.buffer.end_user_action ();
+            history_edit = false;
+            return true;
+        }
+
         public bool shell_context (string[] fields) { return context_bar.prompt.update (fields); }
 
         public void shell_metadata (string abbreviations, string completions, string paths, string functions) {
@@ -620,16 +653,85 @@ namespace Shadow {
         }
         private string last_search = "";
 
+        public bool dispatch_action (string action) {
+            switch (action) {
+            case "palette": show_palette (); return true;
+            case "preferences": show_preferences (); return true;
+            case "shortcuts": if (!editor.has_focus) return false; show_shortcuts (); return true;
+            case "composer": compose_button.active = !compose_button.active; return true;
+            case "hide": hide_session (); return true;
+            case "copy":
+                if (editor.has_focus) {
+                    Gtk.TextIter start, end;
+                    if (editor.buffer.get_selection_bounds (out start, out end)) get_clipboard ().set_text (editor.buffer.get_text (start, end, true));
+                } else terminal_context.copy_selection ();
+                return true;
+            case "paste": paste_clipboard (); return true;
+            case "find-terminal": open_search (false); return true;
+            case "find-composer":
+                if (!editor.has_focus) return false;
+                if (assistance.visible && assistance.handle_key (Gdk.Key.f, Gdk.ModifierType.CONTROL_MASK)) return true;
+                open_search (true); return true;
+            case "documentation": if (!editor.has_focus) return false; show_documentation (); return true;
+            case "recall":
+                if (editor.source () == "") editor.buffer.text = last_source;
+                compose_button.active = true; editor.grab_focus (); return true;
+            case "paste-draft": paste_draft (); return true;
+            case "zoom-in": terminal.font_scale = double.min (3, terminal.font_scale + 0.1); return true;
+            case "zoom-out": terminal.font_scale = double.max (0.5, terminal.font_scale - 0.1); return true;
+            case "zoom-reset": terminal.font_scale = 1; return true;
+            }
+            return false;
+        }
+
+        public void attach_window (WorkspaceWindow target) {
+            // Dialog ownership must not remain tied to a window being destroyed.
+            if (preferences_window != null) { preferences_window.destroy (); preferences_window = null; }
+            if (palette_window != null) { palette_window.destroy (); palette_window = null; }
+            if (shortcuts_window != null) { shortcuts_window.destroy (); shortcuts_window = null; }
+            assistance.dismiss ();
+            input_epoch++;
+            window = target;
+        }
+
         private void show_preferences () {
             if (preferences_window == null) {
-                preferences_window = new PreferencesWindow (window, host.preferences);
+                preferences_window = new PreferencesWindow (window, host.preferences, style_fonts_available ());
                 preferences_window.close_request.connect (() => { preferences_window = null; return false; });
             }
             preferences_window.present ();
         }
 
+        public bool style_fonts_available () {
+            return ((ObjectClass) terminal.get_class ()).find_property ("shadow-style-fonts") != null;
+        }
+
         private void apply_preferences () {
-            terminal.set_font (Pango.FontDescription.from_string (host.preferences.terminal_font));
+            string composer_key = host.preferences.shortcut_label ("composer");
+            compose_button.tooltip_text = "Show Composer or use native terminal input" + (composer_key == "" ? "" : " (" + composer_key + ")");
+            foreach (var command in commands) {
+                for (int i = 0; i < Preferences.ACTION_LABELS.length; i++) {
+                    if (command.label == Preferences.ACTION_LABELS[i]) {
+                        command.shortcut = host.preferences.shortcut_label (Preferences.ACTIONS[i]);
+                        var button = command.source as Gtk.Button;
+                        if (button != null && button.child is Gtk.Box) {
+                            var label = button.child.get_last_child () as Gtk.Label;
+                            if (label != null) label.label = command.shortcut;
+                        }
+                    }
+                }
+            }
+            string signature = host.preferences.terminal_font;
+            if (style_fonts_available ()) signature += "\n" + host.preferences.bold_font + "\n" + host.preferences.italic_font + "\n" + host.preferences.bold_italic_font;
+            if (signature != applied_font_signature) {
+                if (style_fonts_available ()) {
+                    terminal.set_data<string> ("shadow-bold-font", host.preferences.bold_font);
+                    terminal.set_data<string> ("shadow-italic-font", host.preferences.italic_font);
+                    terminal.set_data<string> ("shadow-bold-italic-font", host.preferences.bold_italic_font);
+                }
+                terminal.set_font (Pango.FontDescription.from_string (host.preferences.terminal_font));
+                applied_font_signature = signature;
+            }
             terminal.set_scrollback_lines ((long) host.preferences.scrollback);
             editor.set_editor_font (host.preferences.editor_font);
             preview.set_editor_font (host.preferences.editor_font);
@@ -842,6 +944,8 @@ namespace Shadow {
                 headerbar.shadow-header button.header-action,
                 headerbar.shadow-header .header-action > button,
                 headerbar.shadow-header windowcontrols button { color: %s; }
+                .split-layout > paned separator { background-color: alpha(currentColor, 0.12); }
+                .split-layout .active-pane { outline: 1px solid alpha(@theme_selected_bg_color, 0.55); outline-offset: -1px; }
                 .workspace-tab { border-radius: 8px; }
                 .workspace-tab.selected { background-color: alpha(currentColor, 0.12); }
                 .workspace-tab > button { color: inherit; }
@@ -889,11 +993,30 @@ namespace Shadow {
             open_session (r, Environ.get (), window);
         }
 
-        private void open_session (Request r, string[] environment, WorkspaceWindow? target = null) {
+        public void split_session (WorkspaceWindow window, Gtk.Orientation orientation) {
+            var current = window.active_session;
+            if (current == null) return;
+            var r = new Request ();
+            r.session = "pane-" + Uuid.string_random ().substring (0, 8);
+            r.cwd = current.directory; r.command = r.argv ();
+            open_session (r, Environ.get (), window, current, orientation);
+        }
+
+        public void detach_session (TerminalSession session) {
+            if (session.closing) return;
+            var r = new Request (); r.cwd = session.directory;
+            r.session = session.request.session;
+            var target = new WorkspaceWindow (this, r);
+            session.window.take_session (session);
+            session.attach_window (target);
+            target.add_session (session); target.present_session (session);
+        }
+
+        private void open_session (Request r, string[] environment, WorkspaceWindow? target = null, TerminalSession? relative = null, Gtk.Orientation orientation = Gtk.Orientation.HORIZONTAL) {
             hold ();
             var window = target ?? new WorkspaceWindow (this, r);
             var session = new TerminalSession (this, window, r, environment);
-            window.add_session (session);
+            window.add_session (session, relative, orientation);
             sessions.insert (r.session, session);
             session.ended.connect (() => { sessions.remove (r.session); release (); });
             window.present_session (session);

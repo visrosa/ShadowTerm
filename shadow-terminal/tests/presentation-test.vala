@@ -118,6 +118,111 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/session-layout-transfer-and-focus", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "layout-a", "--cwd", "/tmp"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var first = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (first); window.present_session (first); settle ();
+            var draft = find_editor (first); draft.buffer.text = "printf '日本語\n'";
+            var emulator = first.terminal;
+            var token = first.input_session.token;
+            var second_request = Shadow.Request.parse ({"shadow-term", "--session", "layout-b", "--cwd", "/tmp"});
+            var second = new Shadow.TerminalSession (host, window, second_request, Environ.get ());
+            window.add_session (second, first); window.present_session (second); settle ();
+            assert (window.active_session == second && first.is_presented && second.is_presented);
+            assert (first.get_parent () is Gtk.Paned && second.get_parent () == first.get_parent ());
+            var third_request = Shadow.Request.parse ({"shadow-term", "--session", "layout-c", "--cwd", "/tmp"});
+            var third = new Shadow.TerminalSession (host, window, third_request, Environ.get ());
+            window.add_session (third, second, Gtk.Orientation.VERTICAL); window.present_session (third); settle ();
+            assert (((Gtk.Paned) third.get_parent ()).orientation == Gtk.Orientation.VERTICAL);
+            window.cycle_pane (1); assert (window.active_session == first);
+            window.cycle_pane (-1); assert (window.active_session == third);
+            window.move_to_tab (first); settle ();
+            assert (first.is_presented && !second.is_presented && !third.is_presented);
+            window.join_previous_tab (); settle ();
+            assert (third.is_presented && first.is_presented && !second.is_presented);
+            window.present_session (first);
+            host.detach_session (first); settle ();
+            var detached = first.window;
+            assert (detached != window && first.terminal == emulator && first.input_session.token == token);
+            assert (draft.source () == "printf '日本語\n'");
+            assert (third.is_presented && !third.closing && !second.closing);
+            var fourth_request = Shadow.Request.parse ({"shadow-term", "--session", "layout-d", "--cwd", "/tmp"});
+            var fourth = new Shadow.TerminalSession (host, window, fourth_request, Environ.get ());
+            window.add_session (fourth); window.present_session (fourth); settle ();
+            second.end_session (); settle ();
+            assert (window.active_session == fourth && fourth.is_presented);
+            detached.close_workspace (); window.close_workspace (); settle ();
+            assert (first.closing && second.closing && third.closing && fourth.closing);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
+    Test.add_func ("/presentation/history-boundaries-and-draft-restoration", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "history", "--cwd", "/tmp"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            session.input_session.report (session.input_session.token, "ready", "/tmp");
+            host.preferences.set_shortcut ("composer", "<Control><Alt>m");
+            session.shell_history ({"echo '日本語\nlast\n'", "echo older", "printf unrelated"});
+            var editor = find_editor (session);
+            editor.buffer.text = "echo "; editor.grab_focus (); settle ();
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", " · history$"});
+            run_private ({"xdotool", "windowfocus", "--sync", wid}); settle ();
+            var reveal = (Gtk.Revealer) find_surface (session).get_parent ();
+            assert (reveal.reveal_child);
+            run_private ({"xdotool", "key", "ctrl+shift+m"}); settle ();
+            assert (reveal.reveal_child);
+            run_private ({"xdotool", "key", "ctrl+alt+m"}); settle ();
+            assert (!reveal.reveal_child);
+            run_private ({"xdotool", "key", "ctrl+alt+m"}); settle ();
+            assert (reveal.reveal_child);
+            host.preferences.reset_shortcut ("composer");
+            run_private ({"xdotool", "key", "Up"}); settle ();
+            assert (editor.source () == "echo '日本語\nlast\n'");
+            run_private ({"xdotool", "key", "Down"}); settle ();
+            assert (editor.source () == "echo ");
+            run_private ({"xdotool", "key", "Up"}); settle ();
+            run_private ({"xdotool", "key", "ctrl+Home", "Up"}); settle ();
+            assert (editor.source () == "echo older");
+            run_private ({"xdotool", "type", " edited"}); settle ();
+            string edited = editor.source ();
+            run_private ({"xdotool", "key", "Down"}); settle ();
+            assert (editor.source () == edited);
+            editor.buffer.text = "first\nsecond";
+            Gtk.TextIter cursor; editor.buffer.get_start_iter (out cursor); editor.buffer.place_cursor (cursor);
+            run_private ({"xdotool", "key", "Down"}); settle ();
+            editor.buffer.get_iter_at_mark (out cursor, editor.buffer.get_insert ());
+            assert (cursor.get_line () == 1 && editor.source () == "first\nsecond");
+            window.close_workspace ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
+    Test.add_func ("/presentation/style-font-hook-grid-and-live-switch", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "font-faces", "--cwd", "/tmp"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            if (!session.style_fonts_available ()) Test.skip ("Private style-font hook unavailable");
+            else {
+                session.terminal.feed ("Regular\r\n\x1b[1mBold\x1b[0m\r\n\x1b[3mItalic\x1b[0m\r\n\x1b[1;3mBoth\x1b[0m".data); settle ();
+                int width = (int) session.terminal.get_char_width (), height = (int) session.terminal.get_char_height ();
+                var before_fonts = texture (session.terminal, window);
+                host.preferences.set_style_fonts ("DejaVu Sans Mono Bold 12", "Liberation Mono Italic 12", "Liberation Mono Bold Italic 12"); settle ();
+                assert (!same_pixels (before_fonts, texture (session.terminal, window)));
+                assert (session.terminal.get_char_width () == width && session.terminal.get_char_height () == height);
+                assert (session.terminal.get_data<string> ("shadow-bold-font") == "DejaVu Sans Mono Bold 12");
+                session.terminal.font_scale = 1.3; settle ();
+                assert (session.terminal.get_char_height () > height);
+                host.preferences.set_style_fonts ("", "", ""); settle ();
+            }
+            window.close_workspace ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/analysis-prompt-newest-only-and-independent-paths", () => {
         var editor = new RichInput () {fish_mode = true, working_directory = "/tmp"};
         var window = new Gtk.Window () {child = editor}; window.present (); settle ();

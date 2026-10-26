@@ -75,8 +75,13 @@ function __vcom_prompt --on-event fish_prompt
     command "$SHADOW_TERM_HELPER" context "$has_result" "$result" "$pipeline" "$duration" \
         "$VIRTUAL_ENV" "$CONDA_DEFAULT_ENV" "$remote" "$(count (jobs --group))" "$USER" "$hostname" 2>/dev/null
     command "$SHADOW_TERM_HELPER" metadata "$(abbr --show)" "$(complete)" "$(string join : -- $fish_complete_path)" "$(string join : -- $fish_function_path)" 2>/dev/null
-    if not command "$SHADOW_TERM_HELPER" ready 2>/dev/null
-        # A disconnected host must not leave a usable native shell promptless.
+    # Transfer bounded complete history entries in the readiness handshake.
+    # NUL framing preserves multiline source; the response selects presentation
+    # without another helper running after the host has announced readiness.
+    if builtin history search --null --max=200 | command "$SHADOW_TERM_HELPER" ready 2>/dev/null
+        set --global __vcom_prompt_hidden 1
+    else
+        # Native editing and a disconnected host both need a usable prompt.
         set --erase __vcom_prompt_hidden
     end
     return $previous_status

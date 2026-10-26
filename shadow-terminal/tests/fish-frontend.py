@@ -19,7 +19,7 @@ def worker(tmp):
     binary = str(harness.BINARY)
     env = os.environ.copy()
     logs = open(tmp / "frontend.log", "wb")
-    app = subprocess.Popen([binary, "--session", "composer", "--size", "1040x780"],
+    app = subprocess.Popen([binary, "--session", "composer", "--input", "terminal", "--size", "1040x780"],
                            env=env, cwd=tmp, stdout=logs, stderr=logs)
 
     def xdo(*args, check=True):
@@ -58,6 +58,14 @@ def worker(tmp):
         xdo("windowfocus", "--sync", wid)
         harness.wait_for(lambda: "ready" in state(), "fish readiness event")
         time.sleep(0.05)
+        # Starting native still installs the adapter, so enabling Composer later
+        # suppresses both prompts without restarting the shell.
+        native_seed = f"fish_prompt > {tmp}/initial-native-prompt; printf initial > {tmp}/initial-native-ready"
+        text(native_seed); xdo("key", "Return")
+        harness.wait_for(lambda: read("initial-native-ready"), "native launch prompt")
+        assert read("initial-native-prompt") == "LEFT[0]\n> "
+        harness.wait_for(lambda: "ready" in state(), "ready before enabling Composer")
+        xdo("key", "ctrl+shift+m"); time.sleep(.12)
         # Clicking output must not turn accidental text input into native
         # shell source. All three insertion paths edit the Composer instead.
         for mode in ("typing", "clipboard", "primary"):
@@ -103,6 +111,17 @@ def worker(tmp):
         assert read("native-right") == "RIGHT"
         xdo("key", "ctrl+shift+m")
         time.sleep(0.12)
+        history_seed = f"printf history > {tmp}/history-seed"
+        command(history_seed, "history-seed")
+        xdo("key", "Up", "ctrl+a", "ctrl+shift+c")
+        copied = subprocess.check_output([sys.executable, str(HERE / "clipboard.py"), "--read"], env=env, text=True, timeout=4)
+        assert copied == history_seed, (copied, history_seed)
+        xdo("key", "Right", "Down")
+        text(f"fish_prompt > {tmp}/initial-")
+        xdo("key", "Up", "ctrl+a", "ctrl+shift+c")
+        copied = subprocess.check_output([sys.executable, str(HERE / "clipboard.py"), "--read"], env=env, text=True, timeout=4)
+        assert copied == native_seed, (copied, native_seed)
+        xdo("key", "Right", "Down", "ctrl+a", "BackSpace")
         xdo("key", "F1")
         help_window = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Keyboard Shortcuts$", check=False), "shortcut discovery")
         xdo("windowfocus", "--sync", help_window.splitlines()[0])
@@ -387,6 +406,48 @@ def worker(tmp):
         harness.wait_for(visible, "previous tab shortcut")
         xdo("key", "ctrl+Page_Down")
         harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", " · " + tab + "$", check=False), "next tab shortcut")
+        # Split moves and detaches retain process identity and exact drafts.
+        xdo("key", "ctrl+w")
+        harness.wait_for(lambda: tab not in subprocess.check_output([binary, "--list"], env=env, text=True), "close spare tab")
+        root_pid = int(subprocess.check_output([binary, "--list"], env=env, text=True).split("\t")[2])
+        text(f"printf root > {tmp}/split-root-draft")
+        xdo("key", "ctrl+shift+e")
+        def pane_session():
+            rows = subprocess.check_output([binary, "--list"], env=env, text=True).splitlines()
+            return next((row.split("\t")[0] for row in rows if row.startswith("pane-")), None)
+        pane = harness.wait_for(pane_session, "split session")
+        harness.wait_for(lambda: "ready" in state(pane), "split readiness")
+        listing = subprocess.check_output([binary, "--list"], env=env, text=True)
+        assert listing.count("\tvisible\t") == 2, listing
+        pane_pid = next(int(row.split("\t")[2]) for row in listing.splitlines() if row.startswith(pane + "\t"))
+        command(f"pwd > {tmp}/split-cwd", "split-cwd")
+        assert read("split-cwd").strip() == str(tmp / "subdirectory")
+        text(f"printf pane > {tmp}/split-pane-draft")
+        xdo("key", "ctrl+alt+Left", "Return")
+        harness.wait_for(lambda: read("split-root-draft") == "root", "original split draft retained")
+        harness.wait_for(lambda: "ready" in state(), "root ready after split command")
+        xdo("key", "ctrl+alt+Right")
+        def palette_action(label):
+            xdo("key", "ctrl+shift+p")
+            popup = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Command Palette$", check=False), "layout action palette")
+            xdo("windowfocus", "--sync", popup.splitlines()[0]); text(label); xdo("key", "Return"); time.sleep(.1)
+        palette_action("Move Pane to New Tab")
+        listing = subprocess.check_output([binary, "--list"], env=env, text=True)
+        assert listing.count("\tvisible\t") == 1, listing
+        palette_action("Move Pane to New Window")
+        detached = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", " · " + pane + "$", check=False), "detached pane window").splitlines()[0]
+        assert detached != wid
+        xdo("windowfocus", "--sync", detached)
+        listing = subprocess.check_output([binary, "--list"], env=env, text=True)
+        assert next(int(row.split("\t")[2]) for row in listing.splitlines() if row.startswith(pane + "\t")) == pane_pid
+        assert next(int(row.split("\t")[2]) for row in listing.splitlines() if row.startswith("composer\t")) == root_pid
+        xdo("key", "Return")
+        harness.wait_for(lambda: read("split-pane-draft") == "pane", "draft survives tab and window transfer")
+        harness.wait_for(lambda: "ready" in state(pane), "detached prompt ready")
+        xdo("key", "ctrl+shift+q")
+        harness.wait_for(lambda: not Path(f"/proc/{pane_pid}").exists(), "detached child cleanup")
+        assert Path(f"/proc/{root_pid}").exists() and app.poll() is None
+        xdo("windowfocus", "--sync", wid)
         children = [int(row.split("\t")[2]) for row in subprocess.check_output([binary, "--list"], env=env, text=True).splitlines()]
         xdo("key", "ctrl+shift+q")
         app.wait(timeout=5)
@@ -394,12 +455,12 @@ def worker(tmp):
         logs.flush()
         data = (tmp / "frontend.log").read_text(errors="replace")
         assert "CRITICAL" not in data and "ERROR **" not in data, data
-        print("PASS: Composer fish input, completions, Unicode/multiline argv, status, recall, native-buffer guard, foreground input/interrupt, nested fish, cwd, concurrent drafts, cancellation/timeout, search, preferences, command palette, independent tabs, tab cycling and window cleanup")
+        print("PASS: Composer fish input, completions, Unicode/multiline argv, status, recall, native-buffer guard, foreground input/interrupt, nested fish, cwd, concurrent drafts, cancellation/timeout, search, preferences, command palette, independent tabs, tab cycling, history, runtime prompt activation, split transfers and window cleanup")
     except Exception as error:
         if visible():
             subprocess.run(["import", "-display", env["DISPLAY"], "-window", visible().splitlines()[0],
                             "/tmp/vcom-fish-failure.png"], timeout=4, check=False)
-        raise AssertionError(f"{error}; shell state {state()}") from error
+        raise AssertionError(f"{error}; shell state {state()}; prompt {prompt_fields() if (tmp / 'prompt-context.json').exists() else None}") from error
     finally:
         if app.poll() is None:
             listing = subprocess.run([binary, "--list"], env=env, timeout=4, capture_output=True, text=True)

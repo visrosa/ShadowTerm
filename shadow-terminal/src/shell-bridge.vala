@@ -24,6 +24,16 @@ namespace Shadow {
             window.shell_metadata (abbreviations, completions, paths, functions);
         }
 
+        public bool prompt (string session, string token, int pid, string directory, string[] entries) throws DBusError, IOError {
+            var window = host.shell_window (session, pid);
+            if (token != window.input_session.token) throw new IOError.PERMISSION_DENIED ("Expired shell identity");
+            if (entries.length > 200) throw new IOError.INVALID_DATA ("History snapshot too large");
+            window.shell_history (entries);
+            window.input_session.report (token, "ready", directory);
+            window.shell_directory (directory);
+            return window.composer_active ();
+        }
+
         public void prompt_context (string session, string token, int pid, string[] fields) throws DBusError, IOError {
             var window = host.shell_window (session, pid);
             if (token != window.input_session.token) throw new IOError.PERMISSION_DENIED ("Expired shell identity");

@@ -11,8 +11,26 @@ int main (string[] args) {
             settings.set_input_guard (false);
             settings.set_docs_dismiss (true);
             settings.set_context_visible ("identity", true);
+            settings.set_style_fonts ("DejaVu Sans Mono Bold 12", "Liberation Mono Italic 12", "Monospace Bold Italic 12");
+            settings.set_shortcut ("split-horizontal", "<Control><Alt>e");
+            settings.set_shortcut ("detach-pane", "<Control><Alt>d");
+            settings.set_shortcut ("hide", "");
             settings.apply ("Monospace 14", "Sans 13", 0.65, 25000, false, false, "#112233", "#445566", 0.5);
             var loaded = new Shadow.Preferences (filename);
+            assert (loaded.bold_font == "DejaVu Sans Mono Bold 12" && loaded.italic_font == "Liberation Mono Italic 12" && loaded.bold_italic_font == "Monospace Bold Italic 12");
+            assert (loaded.shortcut_action (Gdk.Key.e, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK) == "split-horizontal");
+            assert (loaded.shortcut_action (Gdk.Key.h, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK) == null);
+            assert (loaded.shortcut_action (Gdk.Key.e, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK) == null);
+            bool conflict = false;
+            try { loaded.set_shortcut ("split-vertical", "<Control><Alt>e"); } catch (IOError.EXISTS error) { conflict = true; }
+            assert (conflict);
+            bool reserved = false;
+            try { loaded.set_shortcut ("split-vertical", "<Control>c"); } catch (IOError.INVALID_ARGUMENT error) { reserved = true; }
+            assert (reserved);
+            loaded.reset_shortcut ("split-horizontal");
+            assert (loaded.shortcut_action (Gdk.Key.e, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK) == "split-horizontal");
+            loaded.reset_shortcuts ();
+            assert (loaded.shortcut ("hide") == "<Control><Shift>h");
             assert (!loaded.guard_pane_input && loaded.docs_dismiss);
             assert (!loaded.context_visible ("git") && loaded.context_visible ("identity"));
             assert (loaded.terminal_font == "Monospace 14" && loaded.editor_font == "Sans 13");

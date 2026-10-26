@@ -26,7 +26,7 @@ def register(data_home, binary):
     desktop = applications / f"{APP_ID}.desktop"
     content = ("[Desktop Entry]\nType=Application\nName=Shadow Term\n"
                "Comment=Terminal sessions with V Composer\n"
-               f'Exec="{executable}"\nIcon={APP_ID}\nStartupWMClass={APP_ID}\n'
+               f'Exec="{executable}" --input composer\nIcon={APP_ID}\nStartupWMClass={APP_ID}\n'
                "Terminal=false\nStartupNotify=true\nCategories=System;TerminalEmulator;\n")
     if desktop.exists() and desktop.read_text() != content:
         backup = desktop.with_suffix(".desktop.previous")
