@@ -160,6 +160,18 @@ nice -n 15 meson compile -C build -j 1
 
 The helper downloads GNOME’s pinned release, verifies its published SHA-256 and builds only the GTK4 library with one job. A C++ compiler and VTE’s build dependencies are needed. `--archive PATH` uses a local release tarball. Source and artifacts stay under `build/private-vte`; no system package is installed. Shadow Term’s runpath selects that library without exporting a library path into child programs. Keep this build directory in place. `meson configure build -Dvte-library-dir=` followed by a rebuild returns to system VTE. System VTE retains its idle link dots, has only an approximate background-colour cursor fallback, and cannot provide automatic alternate-screen hiding or independent style faces. VTE’s [public font setter](https://gnome.pages.gitlab.gnome.org/vte/gtk4/method.Terminal.set_font.html) accepts one base description; the private drawing hook supplies the additional faces without changing terminal semantics or PTY bytes. Future Pane presentation is intended to be independent of VT grid/style restrictions while retaining an established emulator for terminal semantics.
 
+The private VTE still links to system libraries; it does not bundle dependencies such as simdutf. After a dependency changes its shared-library version, both an older retained build and the desktop build can fail at the dynamic loader before `--version` runs. Refresh the private build’s dependency discovery and rebuild it against the installed libraries. For the default source/build locations, from `shadow-terminal/`:
+
+```fish
+set vte_source (realpath build/private-vte/vte-0.82.4)
+set vte_build (realpath build/private-vte/compile)
+nice -n 19 meson setup --reconfigure --clearcache "$vte_build" "$vte_source"
+nice -n 19 meson compile -C "$vte_build" -j 1 vte-2.91-gtk4
+env LD_BIND_NOW=1 ./build/shadow-term --version
+```
+
+If a patch revision created a hash-named directory beneath `build/private-vte/`, use that revision’s source/build paths instead. The last command checks immediate symbol resolution without opening a window. `ldd ./build/shadow-term` shows which private VTE and system dependencies that executable resolves. Retained builds in another checkout have independent libraries and need their own refresh; rebuilding the current checkout does not repair them. [Verification and limits](#verification-and-limits) describes the isolated terminal check.
+
 ## Desktop identity
 
 The generated desktop entry launches this build with `--input composer`. Registration changes files only and does not launch or restart the app. An existing entry is retained as `.desktop.previous` before replacement; an existing backup is never overwritten. The executable embeds an application icon and uses the stable application/WM-class identity `io.github.visrosa.Vibrant.ShadowTerm`. Register the existing build with the current user’s launcher, dock and task switcher:
