@@ -279,17 +279,19 @@ def worker(tmp):
         harness.wait_for(lambda: read("program-input") == "ordinary program input\n", "raw program input")
         time.sleep(0.1)
         command(f"printf restored > {tmp}/after-program", "after-program")
-        # Ordinary readers (including CV's read prompt) can still use Composer.
-        text(f"begin; read --prompt 'printf reader' --local vcom_reader_line; printf '%s\\n' \"$vcom_reader_line\" > {tmp}/program-composer-input; end")
+        # Ordinary readers receive Send + Return, without another terminal
+        # keypress, shell abbreviation expansion, or a change of editor mode.
+        text(f"begin; read --prompt 'printf reader' --local vcom_reader_line; printf '%s\\n' \"$vcom_reader_line\" > {tmp}/program-composer-input; read --prompt 'printf again' --local vcom_reader_next; printf '%s\\n' \"$vcom_reader_next\" > {tmp}/program-composer-next; end")
         xdo("key", "Return")
         time.sleep(0.15)
         xdo("key", "ctrl+shift+m", "ctrl+shift+m")
         text("vcomsay literal $value; program text")
-        xdo("key", "ctrl+Return")
         xdo("key", "Return")
-        harness.wait_for(lambda: read("program-composer-input") == "vcomsay literal $value; program text\n", "foreground Composer paste without shell abbreviation expansion")
+        harness.wait_for(lambda: read("program-composer-input") == "vcomsay literal $value; program text\n", "foreground Composer Enter without abbreviation expansion")
+        text("second answer")
+        xdo("key", "ctrl+Return")
+        harness.wait_for(lambda: read("program-composer-next") == "second answer\n", "foreground Composer clears draft and retains focus")
         harness.wait_for(lambda: "ready" in state(), "ready after foreground Composer")
-        xdo("key", "ctrl+a", "BackSpace")
         # A nested fish has no integration hooks and keeps ordinary input.
         text("fish --no-config")
         xdo("key", "Return")

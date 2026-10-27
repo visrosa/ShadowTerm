@@ -1,5 +1,5 @@
 namespace Shadow {
-    public const string VERSION = "0.0.8";
+    public const string VERSION = "0.0.9";
 
     public errordomain OptionError { INVALID }
 

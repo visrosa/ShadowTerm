@@ -174,9 +174,6 @@ namespace Shadow {
                 if (editor.has_focus && shell_editor && input_session.ready && !input_session.pending &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == 0 &&
                     (key == Gdk.Key.Up || key == Gdk.Key.Down) && navigate_history (key == Gdk.Key.Up)) return true;
-                if (editor.has_focus && key == Gdk.Key.Return &&
-                    (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK &&
-                    !input_session.pending && (!shell_editor || !input_session.ready)) { paste_draft (); return true; }
                 if (editor.has_focus && (key == Gdk.Key.Page_Up || key == Gdk.Key.Page_Down) &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK)) == 0) {
                     var adjustment = terminal.vadjustment;
@@ -205,11 +202,8 @@ namespace Shadow {
                     input_session.reject ("Submission cancelled; draft retained");
                     return true;
                 }
-                if (shell_editor && editor.has_focus && key == Gdk.Key.Return &&
-                    (state & Gdk.ModifierType.SHIFT_MASK) == 0 && input_session.pending) return true;
-                if (shell_editor && editor.has_focus && key == Gdk.Key.Return &&
-                    (state & Gdk.ModifierType.SHIFT_MASK) == 0 && input_session.ready && !input_session.pending) {
-                    submit_command ((state & Gdk.ModifierType.CONTROL_MASK) == 0);
+                if (editor.has_focus && key == Gdk.Key.Return && (state & Gdk.ModifierType.SHIFT_MASK) == 0) {
+                    submit_draft ((state & Gdk.ModifierType.CONTROL_MASK) == 0);
                     return true;
                 }
                 return false;
@@ -245,17 +239,11 @@ namespace Shadow {
             });
             input_session.changed.connect (refresh_input);
             input_session.accepted.connect ((source_text) => {
-                last_source = source_text;
                 history_index = -1;
                 string[] recent = {source_text};
                 foreach (var entry in history_entries) if (entry != source_text && recent.length < 200) recent += entry;
                 history_entries = recent;
-                preview.fish_mode = editor.fish_mode;
-                preview.dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
-                preview.buffer.text = source_text;
-                preview_card.reveal_child = true;
-                if (editor.source () == source_text) editor.buffer.text = "";
-                refresh_input ();
+                remember_input (source_text);
             });
             input_session.rejected.connect ((reason) => {
                 feedback.label = reason;
@@ -339,13 +327,10 @@ namespace Shadow {
                 visible = false, tooltip_text = "Cancel Submission (Escape)", valign = Gtk.Align.CENTER, has_frame = false};
             cancel_button.clicked.connect (() => input_session.reject ("Submission cancelled; draft retained"));
             submit_button = new Gtk.Button.from_icon_name ("go-up-symbolic") {
-                visible = false, sensitive = false, tooltip_text = "Run Command (Enter; Shift+Enter adds a line)", valign = Gtk.Align.CENTER};
+                visible = false, sensitive = false, tooltip_text = "Send (Enter; Shift+Enter adds a line)", valign = Gtk.Align.CENTER};
             submit_button.add_css_class ("suggested-action");
             submit_button.add_css_class ("circular");
-            submit_button.clicked.connect (() => {
-                if (shell_editor && input_session.ready) submit_command (false);
-                else paste_draft ();
-            });
+            submit_button.clicked.connect (() => submit_draft (false));
             var options = new Gtk.MenuButton () {icon_name = "view-more-symbolic", tooltip_text = "Composer Options",
                 valign = Gtk.Align.CENTER, margin_start = 4, margin_end = 10, has_frame = false};
             var popover = new Gtk.Popover ();
@@ -369,7 +354,7 @@ namespace Shadow {
             });
             recall_button.sensitive = false;
             menu_item (tools, popover, "Find in Composer", "Ctrl+F", () => open_search (true));
-            menu_item (tools, popover, "Paste into Terminal", "Ctrl+Shift+Enter", paste_draft);
+            menu_item (tools, popover, "Paste Draft without Return", "Ctrl+Shift+Enter", paste_draft);
             var context_options = new Gtk.Expander ("Context Information") {child = new ContextOptions (host.preferences)};
             tools.append (context_options);
             menu_item (tools, popover, "Refresh Repository", "", () => context_bar.refresh_repository ());
@@ -465,8 +450,8 @@ namespace Shadow {
             if (analysis.enabled != command_input) analysis.enabled = command_input;
             submit_button.sensitive = running && !input_session.pending && editor.source () != "";
             submit_button.visible = editor.source () != "" && !input_session.pending;
-            submit_button.icon_name = command_input ? "go-up-symbolic" : "edit-paste-symbolic";
-            submit_button.tooltip_text = command_input ? "Run Command (Enter; Shift+Enter adds a line)" : "Paste into Program (Ctrl+Enter; Enter adds a line)";
+            submit_button.icon_name = "go-up-symbolic";
+            submit_button.tooltip_text = "Send (Enter; Shift+Enter adds a line)";
             cancel_button.visible = input_session.pending;
             recall_button.sensitive = last_source != "" && editor.source () == "";
             bool became_ready = input_session.ready && !previous_ready;
@@ -486,7 +471,7 @@ namespace Shadow {
 
         private void update_composer_visibility () {
             // Screen state comes from VTE itself. Ordinary foreground readers
-            // can still consume explicitly pasted Composer source.
+            // can still receive submitted Composer source and Return.
             composer.reveal_child = compose_button.active && (!alternate_screen || alternate_composer_override);
             update_terminal_cursor ();
         }
@@ -522,6 +507,45 @@ namespace Shadow {
             if (!presentation_dirty || !shell_editor || !input_session.ready || input_session.pending) return;
             presentation_dirty = false;
             terminal.feed_child ("\x1b\x10".data);
+        }
+
+        private void remember_input (string source_text) {
+            last_source = source_text;
+            preview.fish_mode = editor.fish_mode;
+            preview.dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+            preview.buffer.text = source_text;
+            preview_card.reveal_child = true;
+            if (editor.source () == source_text) {
+                Gtk.TextIter start, end;
+                editor.buffer.get_bounds (out start, out end);
+                editor.buffer.begin_user_action ();
+                editor.buffer.delete (ref start, ref end);
+                editor.buffer.end_user_action ();
+            }
+            refresh_input ();
+        }
+
+        private void submit_draft (bool from_enter) {
+            if (!running || closing || input_session.pending) return;
+            if (shell_editor && input_session.ready) {
+                submit_command (from_enter);
+                return;
+            }
+            string source = editor.source ();
+            if (source.length > 65536) {
+                feedback.label = "Input must contain at most 65536 UTF-8 bytes; draft retained";
+                feedback_bar.visible = true;
+                return;
+            }
+            // Return must follow VTE's closing bracketed-paste marker, rather
+            // than becoming part of a paste that the program only inserts.
+            if (source != "") terminal.paste_text (source);
+            terminal.feed_child ("\r".data);
+            // Arbitrary programs have no source-acceptance acknowledgement.
+            // Clear only the snapshot just queued to the live emulator.
+            if (source != "") remember_input (source);
+            feedback_bar.visible = false;
+            editor.grab_focus ();
         }
 
         private void submit_command (bool from_enter) {

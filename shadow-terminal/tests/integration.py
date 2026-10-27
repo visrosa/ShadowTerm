@@ -150,7 +150,7 @@ with (root/'raw-input').open('ab',buffering=0) as out:
         source = "# Heading\n**bold** `code` $literal"
         for i, line in enumerate(source.splitlines()):
             if i:
-                xdo("key", "Return")
+                xdo("key", "shift+Return")
             type_text(line)
         # Source-copy includes markup hidden by the WYSIWYG presentation.
         xdo("key", "ctrl+a", "ctrl+shift+c", "ctrl+shift+Return")
@@ -161,10 +161,27 @@ with (root/'raw-input').open('ab',buffering=0) as out:
         xdo("key", "ctrl+shift+v")
         wait_for(lambda: len(capture.read_bytes()) > len(expected), "clipboard paste")
         assert capture.read_bytes() == expected * 2, (capture.read_bytes(), expected * 2)
-        xdo("key", "Page_Up", "Page_Down", "F1")
+        # Foreground Send uses the same editor keys as a shell prompt. The
+        # final CR must be outside the emulator's bracketed-paste envelope.
+        xdo("key", "ctrl+shift+m", "ctrl+shift+m", "Return")
+        sent = expected * 3 + b"\r"
+        wait_for(lambda: len(capture.read_bytes()) >= len(sent), "foreground Enter submission")
+        assert capture.read_bytes() == sent, (capture.read_bytes(), sent)
+        type_text("second draft")
+        xdo("key", "ctrl+Return")
+        sent += b"\x1b[200~second draft\x1b[201~\r"
+        wait_for(lambda: len(capture.read_bytes()) >= len(sent), "foreground Ctrl+Enter submission")
+        assert capture.read_bytes() == sent, (capture.read_bytes(), sent)
+        # Clearing the submitted draft and retaining Composer focus allow a
+        # following empty response without retyping or focusing the terminal.
+        xdo("key", "Return")
+        sent += b"\r"
+        wait_for(lambda: len(capture.read_bytes()) >= len(sent), "empty foreground response")
+        assert capture.read_bytes() == sent, (capture.read_bytes(), sent)
+        xdo("key", "ctrl+shift+m", "Page_Up", "Page_Down", "F1")
         raw_keys = b"\x1b[5~\x1b[6~\x1bOP"
-        wait_for(lambda: len(capture.read_bytes()) >= len(expected) * 2 + len(raw_keys), "alternate-screen program keys")
-        assert capture.read_bytes() == expected * 2 + raw_keys
+        wait_for(lambda: len(capture.read_bytes()) >= len(sent) + len(raw_keys), "alternate-screen program keys")
+        assert capture.read_bytes() == sent + raw_keys
         # Repeating a launcher with identical argv must reuse the session.
         invoke(*argv)
         assert sessions()["raw"][1] == raw_pid
@@ -222,7 +239,7 @@ with (root/'raw-input').open('ab',buffering=0) as out:
         log.flush()
         app_log = read(tmp / "app.log")
         assert "CRITICAL" not in app_log and "ERROR **" not in app_log, app_log
-        print("PASS: fish/argv/cwd, Ctrl+C, PTY resize, persistent sessions, composer/clipboard paste, focus/hide, launch/exit/cleanup")
+        print("PASS: fish/argv/cwd, Ctrl+C, PTY resize, persistent sessions, composer/clipboard paste, foreground Send/Return, focus/hide, launch/exit/cleanup")
     finally:
         for name in ("raw", "held", "short", "bad", "stubborn", "default"):
             try:
@@ -269,7 +286,7 @@ def main():
     clean_env = os.environ.copy()
     clean_env.pop("DISPLAY", None)
     clean_env.pop("WAYLAND_DISPLAY", None)
-    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.8"
+    assert subprocess.check_output([str(BINARY), "--version"], env=clean_env, text=True).strip() == "Shadow Term 0.0.9"
     assert subprocess.run([str(BINARY), "--size", "3x4"], env=clean_env, capture_output=True).returncode == 2
     with tempfile.TemporaryDirectory(prefix="shadow-term-test-") as directory:
         tmp = Path(directory)
