@@ -221,3 +221,4 @@ The existing [CV shadow client](../rich-input/README.md) remains available indep
 [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) is a possible optional panel backend for Wayland compositors implementing Layer Shell. It does not supply that protocol on unsupported compositors, GNOME Wayland or X11. Ordinary Shadow Term windows and dock identity do not depend on it.
 
 [Compiler warning boundaries](docs/compiler-warnings.md) records the full-build warning inventory, corrected C binding contracts and remaining generator/toolkit diagnostics.
+[Graphics protocol feasibility](docs/graphics-protocols.md) documents the pinned VTE/ctx audit and isolated producer/framebuffer fixtures. Kitty graphics and ctx vector rendering are not implemented or advertised by Shadow Term.
