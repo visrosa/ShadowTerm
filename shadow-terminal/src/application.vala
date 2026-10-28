@@ -484,7 +484,11 @@ namespace Shadow {
             if (hidden) terminal.add_css_class ("shadow-composer-cursor");
             else terminal.remove_css_class ("shadow-composer-cursor");
             terminal.queue_draw ();
-            if (PRIVATE_VTE) return;
+            if (PRIVATE_VTE) {
+                terminal.set_color_cursor (host.preferences.system_colors ? null : host.preferences.colors.special (16));
+                terminal.set_color_cursor_foreground (host.preferences.system_colors ? null : host.preferences.colors.special (17));
+                return;
+            }
             bool dark = desktop_settings.prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
             Gdk.RGBA background = host.preferences.pane_background (dark);
             Gdk.RGBA foreground = host.preferences.pane_foreground (dark);
@@ -492,8 +496,8 @@ namespace Shadow {
                 terminal.set_color_cursor (background);
                 terminal.set_color_cursor_foreground (foreground);
             } else {
-                terminal.set_color_cursor (null);
-                terminal.set_color_cursor_foreground (null);
+                terminal.set_color_cursor (host.preferences.system_colors ? null : host.preferences.colors.special (16));
+                terminal.set_color_cursor_foreground (host.preferences.system_colors ? null : host.preferences.colors.special (17));
             }
             terminal.set_cursor_blink_mode (hidden ? Vte.CursorBlinkMode.OFF : Vte.CursorBlinkMode.SYSTEM);
         }
@@ -773,7 +777,9 @@ namespace Shadow {
                 background.red * 0.2126 + background.green * 0.7152 + background.blue * 0.0722 < 0.5 : dark;
             editor.dark = editor_dark;
             if (preview != null) preview.dark = dark;
-            terminal.set_colors (foreground, background, null);
+            terminal.set_colors (foreground, background, host.preferences.system_colors ? null : host.preferences.colors.palette ());
+            terminal.set_color_highlight (host.preferences.system_colors ? null : host.preferences.colors.special (18));
+            terminal.set_color_highlight_foreground (host.preferences.system_colors ? null : host.preferences.colors.special (19));
             update_terminal_cursor ();
             if (compose_box != null) {
                 if (host.preferences.inherit_style) compose_box.add_css_class ("inherit-pane-style");

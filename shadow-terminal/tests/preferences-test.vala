@@ -1,3 +1,9 @@
+private void reject_preset (string text) {
+    bool rejected = false;
+    try { Shadow.TerminalColors.import_iterm (text); } catch (Error error) { rejected = true; }
+    assert (rejected);
+}
+
 int main (string[] args) {
     Test.init (ref args);
     Test.add_func ("/preferences/round-trip-and-bounds", () => {
@@ -63,6 +69,64 @@ int main (string[] args) {
             FileUtils.unlink (filename);
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);
+    });
+    Test.add_func ("/preferences/terminal-colors-import-and-persistence", () => {
+        string? directory = null;
+        try {
+            var colors = Shadow.TerminalColors.import_iterm (theme_preset ());
+            var palette = colors.palette ();
+            for (int i = 0; i < 16; i++) {
+                assert ((palette[i].red - i / 22.0).abs () < 0.003);
+                assert ((palette[i].green - 0.25).abs () < 0.003);
+            }
+            assert (colors.special (16) != null && colors.special (19) != null);
+            var minimal = Shadow.TerminalColors.import_iterm (theme_preset (false));
+            for (int i = 16; i < 20; i++) assert (minimal.special (i) == null);
+            directory = DirUtils.make_tmp ("shadow-theme-XXXXXX");
+            string filename = Path.build_filename (directory, "preferences.ini");
+            var settings = new Shadow.Preferences (filename);
+            settings.apply ("Monospace 15", "Sans 14", 0.6, 20000);
+            settings.import_colors (colors);
+            var loaded = new Shadow.Preferences (filename);
+            assert (!loaded.system_colors && loaded.opacity == 0.6 && loaded.terminal_font == "Monospace 15");
+            assert (loaded.foreground == colors.foreground && loaded.background == colors.background);
+            for (int i = 0; i < 20; i++) assert (loaded.colors.get_color (i) == colors.get_color (i));
+            loaded.colors.set_color (3, "#123456"); loaded.colors.set_color (16, "");
+            loaded.set_colors (loaded.colors);
+            var edited = new Shadow.Preferences (filename);
+            assert (edited.colors.get_color (3) == "rgb(18,52,86)" && edited.colors.special (16) == null);
+            edited.apply ("Monospace 15", "Sans 14", 0.6, 20000);
+            var system = new Shadow.Preferences (filename);
+            assert (system.system_colors && system.colors.get_color (3) == "rgb(18,52,86)");
+            FileUtils.unlink (filename);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+        if (directory != null) DirUtils.remove (directory);
+    });
+    Test.add_func ("/preferences/terminal-colors-invalid-input", () => {
+        reject_preset ("not XML");
+        reject_preset ("<plist><dict/></plist>");
+        reject_preset (theme_preset ().replace ("Ansi 15 Color", "Ansi 14 Color"));
+        reject_preset (theme_preset ().replace ("Ansi 15 Color", "Unknown Color"));
+        reject_preset (theme_preset ().replace ("<real>0.25</real>", "<real>nan</real>"));
+        reject_preset (theme_preset ().replace ("<real>0.25</real>", "<real>1.01</real>"));
+        reject_preset (theme_preset ().replace ("<real>0.25</real>", "<real>-0.1</real>"));
+        reject_preset (theme_preset ().replace ("sRGB", "Display P3"));
+        reject_preset (theme_preset ().replace ("Green Component", "Missing Component"));
+        reject_preset (theme_preset ().replace ("<dict>", "<array>"));
+        reject_preset ("<!DOCTYPE plist [<!ENTITY x SYSTEM 'file:///etc/passwd'>]>" + theme_preset ());
+        reject_preset (string.nfill (262145, 'x'));
+    });
+    Test.add_func ("/preferences/terminal-colors-malformed-persistence", () => {
+        var file = new KeyFile ();
+        file.set_string ("terminal-colors", "ansi-0", "invalid");
+        file.set_string ("terminal-colors", "ansi-1", "#123456");
+        file.set_string ("terminal-colors", "cursor", "invalid");
+        var colors = new Shadow.TerminalColors ();
+        var defaults = new Shadow.TerminalColors ();
+        colors.load (file);
+        assert (colors.get_color (0) == defaults.get_color (0));
+        assert (colors.get_color (1) == "rgb(18,52,86)");
+        assert (colors.special (16) == null);
     });
     return Test.run ();
 }

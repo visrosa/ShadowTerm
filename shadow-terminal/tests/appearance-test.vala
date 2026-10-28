@@ -69,5 +69,67 @@ int main (string[] args) {
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);
     });
+    Test.add_func ("/appearance/theme-import-edit-reset", () => {
+        string? directory = null;
+        try {
+            directory = DirUtils.make_tmp ("shadow-theme-ui-XXXXXX");
+            string filename = Path.build_filename (directory, "preferences.ini");
+            string theme = Path.build_filename (directory, "theme.itermcolors");
+            FileUtils.set_contents (theme, theme_preset ());
+            var settings = new Shadow.Preferences (filename);
+            settings.apply ("Monospace 12", "Monospace 12", 0.7, 10000);
+            var parent = new Gtk.Window ();
+            var dialog = new Shadow.PreferencesWindow (parent, settings);
+            parent.present (); dialog.present ();
+            var loop = new MainLoop ();
+            dialog.import_theme_file.begin (File.new_for_path (theme), (obj, result) => {
+                dialog.import_theme_file.end (result); loop.quit ();
+            }); loop.run ();
+            assert (!settings.system_colors && settings.opacity == 0.7);
+            assert (((Gtk.Label) find_control (dialog.child, "pref-status")).label == "Imported theme.itermcolors");
+            for (int i = 0; i < 20; i++) {
+                var control = (Gtk.ColorDialogButton) find_control (dialog.child, "pref-color-" + Shadow.TerminalColors.KEYS[i]);
+                Gdk.RGBA expected = {}; expected.parse (settings.colors.get_color (i));
+                assert (control.sensitive && control.get_rgba ().equal (expected));
+            }
+            var red = (Gtk.ColorDialogButton) find_control (dialog.child, "pref-color-ansi-1");
+            Gdk.RGBA edited = {}; edited.parse ("#123456"); red.rgba = edited;
+            ((Gtk.CheckButton) find_control (dialog.child, "pref-auto-cursor")).active = true;
+            assert (!find_control (dialog.child, "pref-color-cursor").sensitive);
+            // A failed import leaves pending edits and the current theme intact.
+            FileUtils.set_contents (theme, "<plist><dict/></plist>");
+            dialog.import_theme_file.begin (File.new_for_path (theme), (obj, result) => {
+                dialog.import_theme_file.end (result); loop.quit ();
+            }); loop.run ();
+            assert (((Gtk.Label) find_control (dialog.child, "pref-status")).label.has_prefix ("Could not import theme:"));
+            dialog.close ();
+            var loaded = new Shadow.Preferences (filename);
+            assert (loaded.colors.get_color (1) == edited.to_string () && loaded.colors.special (16) == null);
+            var reset_dialog = new Shadow.PreferencesWindow (parent, loaded);
+            reset_dialog.present ();
+            ((Gtk.Button) find_control (reset_dialog.child, "pref-appearance-reset")).clicked ();
+            reset_dialog.close ();
+            var defaults = new Shadow.Preferences (filename);
+            var default_colors = new Shadow.TerminalColors ();
+            assert (defaults.system_colors && defaults.opacity == 1);
+            for (int i = 0; i < 20; i++) assert (defaults.colors.get_color (i) == default_colors.get_color (i));
+            FileUtils.set_contents (theme, theme_preset ());
+            var unsaved = new Shadow.Preferences (directory);
+            var unsaved_dialog = new Shadow.PreferencesWindow (parent, unsaved);
+            unsaved_dialog.present ();
+            unsaved_dialog.import_theme_file.begin (File.new_for_path (theme), (obj, result) => {
+                unsaved_dialog.import_theme_file.end (result); loop.quit ();
+            }); loop.run ();
+            assert (!unsaved.system_colors);
+            assert (((Gtk.Label) find_control (unsaved_dialog.child, "pref-status")).label.has_prefix ("Imported; could not save:"));
+            var imported_red = (Gtk.ColorDialogButton) find_control (unsaved_dialog.child, "pref-color-ansi-1");
+            Gdk.RGBA expected_red = {}; expected_red.parse (unsaved.colors.get_color (1));
+            assert (imported_red.get_rgba ().equal (expected_red));
+            unsaved_dialog.close ();
+            parent.destroy ();
+            FileUtils.unlink (theme); FileUtils.unlink (filename);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+        if (directory != null) DirUtils.remove (directory);
+    });
     return Test.run ();
 }

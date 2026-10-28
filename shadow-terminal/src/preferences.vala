@@ -107,6 +107,7 @@ namespace Shadow {
         public bool system_colors = true;
         public string foreground = "#eeeeec";
         public string background = "#20242b";
+        public TerminalColors colors = new TerminalColors ();
         public double header_opacity_boost = 0;
         public const string[] CONTEXT_KEYS = {"enabled", "directory", "git", "result", "duration", "environment", "identity", "jobs"};
         public const string[] CONTEXT_LABELS = {"Show context information", "Working directory", "Git branch and changes",
@@ -119,6 +120,7 @@ namespace Shadow {
             this.filename = filename ?? Path.build_filename (Environment.get_user_config_dir (), "shadow-term", "preferences.ini");
             var file = new KeyFile ();
             try { file.load_from_file (this.filename, KeyFileFlags.NONE); } catch (Error error) { return; }
+            colors.load (file);
             try { terminal_font = valid_font (file.get_string ("appearance", "terminal-font"), terminal_font); } catch (Error error) {}
             try { bold_font = optional_font (file.get_string ("appearance", "bold-font")); } catch (Error error) {}
             try { italic_font = optional_font (file.get_string ("appearance", "italic-font")); } catch (Error error) {}
@@ -220,11 +222,12 @@ namespace Shadow {
 
         public void apply (string terminal, string editor, double opacity, int64 scrollback,
                            bool inherit_style = true, bool system_colors = true,
-                           string foreground = "#eeeeec", string background = "#20242b", double header_opacity_boost = 0) throws Error {
+                           string foreground = "#eeeeec", string background = "#20242b", double header_opacity_boost = 0, TerminalColors? colors = null) throws Error {
             terminal_font = valid_font (terminal, terminal_font);
             editor_font = valid_font (editor, editor_font);
             this.opacity = opacity.is_finite () ? double.max (0, double.min (1, opacity)) : 1;
             this.scrollback = int64.max (100, int64.min (100000, scrollback));
+            if (colors != null) this.colors = colors;
             this.inherit_style = inherit_style;
             this.system_colors = system_colors;
             this.foreground = valid_color (foreground, this.foreground);
@@ -244,8 +247,21 @@ namespace Shadow {
             save ();
         }
 
+        public void set_colors (TerminalColors colors) throws Error {
+            this.colors = colors;
+            changed (); save ();
+        }
+
+        public void import_colors (TerminalColors colors) throws Error {
+            this.colors = colors;
+            foreground = colors.foreground; background = colors.background;
+            system_colors = false;
+            changed (); save ();
+        }
+
         private void save () throws Error {
             var file = new KeyFile ();
+            colors.save (file);
             shortcuts.foreach ((action, value) => file.set_string ("shortcuts", action, value));
             file.set_string ("appearance", "terminal-font", terminal_font);
             file.set_string ("appearance", "bold-font", bold_font);
@@ -320,6 +336,10 @@ namespace Shadow {
         private Gtk.Switch system_colors;
         private Gtk.ColorDialogButton foreground;
         private Gtk.ColorDialogButton background;
+        private Gtk.ColorDialogButton[] color_controls = {};
+        private Gtk.CheckButton[] automatic_colors = {};
+        private Cancellable import_cancel = new Cancellable ();
+        private uint import_generation = 0;
         private Gtk.Scale header_boost;
         private Gtk.Label status;
         private bool updating = false;
@@ -362,6 +382,7 @@ namespace Shadow {
             header.title_widget = new Gtk.StackSwitcher () {stack = stack}; titlebar = header;
             var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 0); root.append (stack);
             status = new Gtk.Label ("") {xalign = 0, wrap = true, margin_start = 24, margin_end = 24, margin_bottom = 8};
+            status.add_css_class ("pref-status");
             root.append (status); child = root;
 
             var appearance = page ();
@@ -399,6 +420,38 @@ namespace Shadow {
             row (colors, "Background opacity", "Transparency depends on the compositor.", opacity, "pref-opacity");
             row (colors, "Inherit Pane Style", "Unify Composer and header colors and opacity.", inherit_style, "pref-inherit");
             row (colors, "Header opacity boost", "0% matches the Pane; 100% makes the header opaque.", header_boost, "pref-header-boost");
+            var theme_group = group (appearance, "Terminal color scheme");
+            var import_button = new Gtk.Button.with_label ("Import…");
+            row (theme_group, "Import iTerm2 theme", "Load an .itermcolors file, then customize any color below.", import_button, "pref-import-theme");
+            import_button.clicked.connect (() => {
+                var filter = new Gtk.FileFilter () {name = "iTerm2 color schemes"}; filter.add_pattern ("*.itermcolors");
+                var filters = new ListStore (typeof (Gtk.FileFilter)); filters.append (filter);
+                var chooser = new Gtk.FileDialog () {title = "Import Terminal Color Scheme", filters = filters, default_filter = filter};
+                chooser.open.begin (this, import_cancel, (obj, result) => {
+                    try { import_theme_file.begin (chooser.open.end (result)); }
+                    catch (Error error) {
+                        if (!(error is Gtk.DialogError.DISMISSED) && !(error is Gtk.DialogError.CANCELLED) && !import_cancel.is_cancelled ()) status.label = error.message;
+                    }
+                });
+            });
+            var palette_group = group (appearance, "ANSI palette");
+            var special_group = group (appearance, "Cursor and selection");
+            for (int i = 0; i < TerminalColors.KEYS.length; i++) {
+                int index = i;
+                Gdk.RGBA color = {}; color.parse (settings.colors.get_color (i) != "" ? settings.colors.get_color (i) : settings.foreground);
+                var button = new Gtk.ColorDialogButton (new Gtk.ColorDialog () {title = TerminalColors.LABELS[i], with_alpha = false}) {rgba = color};
+                var automatic = new Gtk.CheckButton.with_label ("Automatic") {active = i >= 16 && settings.colors.get_color (i) == ""};
+                color_controls += button; automatic_colors += automatic;
+                var controls = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+                if (i >= 16) controls.append (automatic);
+                controls.append (button);
+                button.add_css_class ("pref-color-" + TerminalColors.KEYS[i]);
+                automatic.add_css_class ("pref-auto-" + TerminalColors.KEYS[i]);
+                row (i < 16 ? palette_group : special_group, TerminalColors.LABELS[i], i < 16 ? "ANSI %d".printf (i) : "", controls);
+                button.notify["rgba"].connect (schedule_apply);
+                automatic.toggled.connect (() => { color_controls[index].sensitive = !system_colors.active && !automatic.active; schedule_apply (); });
+            }
+            update_color_sensitivity ();
             add_page (stack, appearance, "appearance", "Appearance");
 
             var input = page ();
@@ -450,17 +503,20 @@ namespace Shadow {
             terminal.notify["font-desc"].connect (schedule_apply); editor.notify["font-desc"].connect (schedule_apply);
             opacity.value_changed.connect (schedule_apply); lines.value_changed.connect (schedule_apply);
             inherit_style.notify["active"].connect (() => { header_boost.sensitive = inherit_style.active; schedule_apply (); });
-            system_colors.notify["active"].connect (() => { foreground.sensitive = background.sensitive = !system_colors.active; schedule_apply (); });
+            system_colors.notify["active"].connect (() => { update_color_sensitivity (); schedule_apply (); });
             foreground.notify["rgba"].connect (schedule_apply); background.notify["rgba"].connect (schedule_apply); header_boost.value_changed.connect (schedule_apply);
-            var reset = new Gtk.Button.with_label ("Restore Appearance Defaults") {halign = Gtk.Align.START}; appearance.append (reset);
+            var reset = new Gtk.Button.with_label ("Restore Appearance Defaults") {halign = Gtk.Align.START}; appearance.append (reset); reset.add_css_class ("pref-appearance-reset");
             reset.clicked.connect (() => {
                 updating = true;
                 terminal.font_desc = Pango.FontDescription.from_string ("Monospace 12"); editor.font_desc = Pango.FontDescription.from_string ("Monospace 12");
                 foreach (var custom in custom_faces) custom.active = false;
                 opacity.set_value (100); lines.value = 10000; inherit_style.active = system_colors.active = true;
                 Gdk.RGBA reset_fg = {}, reset_bg = {}; reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b"); foreground.rgba = reset_fg; background.rgba = reset_bg; header_boost.set_value (0);
+                load_color_controls (new TerminalColors ());
+                update_color_sensitivity ();
                 updating = false; schedule_apply ();
             });
+            ((Gtk.Widget) this).unrealize.connect (() => import_cancel.cancel ());
             unmap.connect (flush);
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
@@ -476,6 +532,57 @@ namespace Shadow {
                 if (key == Gdk.Key.Escape) { close (); return true; }
                 return false;
             }); ((Gtk.Widget) this).add_controller (keys);
+        }
+
+        private void update_color_sensitivity () {
+            foreground.sensitive = background.sensitive = !system_colors.active;
+            for (int i = 0; i < color_controls.length; i++) {
+                automatic_colors[i].sensitive = !system_colors.active;
+                color_controls[i].sensitive = !system_colors.active && !automatic_colors[i].active;
+            }
+        }
+        private void load_color_controls (TerminalColors colors) {
+            for (int i = 0; i < color_controls.length; i++) {
+                var value = colors.get_color (i);
+                automatic_colors[i].active = i >= 16 && value == "";
+                Gdk.RGBA color = {}; color.parse (value == "" ? settings.foreground : value);
+                color_controls[i].rgba = color;
+            }
+        }
+        public async void import_theme_file (File file) {
+            uint generation = ++import_generation;
+            try {
+                var info = yield file.query_info_async (FileAttribute.STANDARD_TYPE, FileQueryInfoFlags.NONE, Priority.DEFAULT, import_cancel);
+                if (info.get_file_type () != FileType.REGULAR) throw new IOError.INVALID_DATA ("Choose a regular theme file");
+                var stream = yield file.read_async (Priority.DEFAULT, import_cancel);
+                var data = new ByteArray ();
+                try {
+                    while (data.len <= 262144) {
+                        var bytes = yield stream.read_bytes_async (16384, Priority.DEFAULT, import_cancel);
+                        if (bytes.get_size () == 0) break;
+                        data.append (bytes.get_data ());
+                    }
+                } finally { try { stream.close (null); } catch (Error error) {} }
+                if (import_cancel.is_cancelled () || generation != import_generation) return;
+                uint length = data.len;
+                data.append ({0});
+                if (length > 262144 || length == 0 || ((string) data.data).length != length)
+                    throw new IOError.INVALID_DATA ("Choose an XML iTerm2 preset under 256 KiB without NUL bytes");
+                string text = (string) data.data;
+                var colors = TerminalColors.import_iterm (text);
+                flush ();
+                string? save_error = null;
+                try { settings.import_colors (colors); } catch (Error error) { save_error = error.message; }
+                updating = true;
+                system_colors.active = false;
+                Gdk.RGBA fg = {}, bg = {}; fg.parse (settings.foreground); bg.parse (settings.background);
+                foreground.rgba = fg; background.rgba = bg;
+                load_color_controls (colors); update_color_sensitivity ();
+                updating = false;
+                status.label = save_error == null ? "Imported " + file.get_basename () : "Imported; could not save: " + save_error;
+            } catch (Error error) {
+                if (!import_cancel.is_cancelled () && generation == import_generation) status.label = "Could not import theme: " + error.message;
+            }
         }
 
         private void refresh_shortcut_labels () {
@@ -495,8 +602,11 @@ namespace Shadow {
         }
         private void apply_controls () {
             try {
+                var colors = new TerminalColors ();
+                for (int i = 0; i < color_controls.length; i++)
+                    colors.set_color (i, i >= 16 && automatic_colors[i].active ? "" : color_controls[i].get_rgba ().to_string ());
                 settings.apply (terminal.font_desc.to_string (), editor.font_desc.to_string (), opacity.get_value () / 100,
-                    (int64) lines.value, inherit_style.active, system_colors.active, foreground.get_rgba ().to_string (), background.get_rgba ().to_string (), header_boost.get_value () / 100);
+                    (int64) lines.value, inherit_style.active, system_colors.active, foreground.get_rgba ().to_string (), background.get_rgba ().to_string (), header_boost.get_value () / 100, colors);
                 settings.set_style_fonts (custom_faces[0].active ? faces[0].font_desc.to_string () : "",
                     custom_faces[1].active ? faces[1].font_desc.to_string () : "", custom_faces[2].active ? faces[2].font_desc.to_string () : "");
                 status.label = "";
