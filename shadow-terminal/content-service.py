@@ -113,11 +113,15 @@ def clean(text):
     return "".join(c for c in text if c in "\n\t" or ord(c) >= 32 and ord(c) != 127)
 
 
-def run(argv, cwd=None, extra_env=None):
+def run(argv, cwd=None, extra_env=None, binary=False):
     if not argv or any(not isinstance(a, str) or "\0" in a for a in argv):
         raise ValueError("Provider argv must contain literal strings")
     env = os.environ | {"PAGER": "cat", "MANPAGER": "cat", "MANWIDTH": "100", "TERM": "dumb", "NO_COLOR": "1"}
-    env.update(extra_env or {})
+    for key, value in (extra_env or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     with subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
         data = bytearray()
@@ -142,6 +146,10 @@ def run(argv, cwd=None, extra_env=None):
             if truncated:
                 proc.kill()
             code = proc.wait(timeout=max(.05, deadline - time.monotonic()))
+            if binary:
+                if truncated or code:
+                    raise ValueError("Context provider failed or exceeded the output limit")
+                return bytes(data)
             text = clean(bytes(data[:LIMIT]).decode("utf-8", "replace"))
             if code and not truncated:
                 raise ValueError(text.strip() or f"Provider exited {code}")
@@ -216,6 +224,25 @@ def respond(request):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.complete(request["context"], request["config"])
+    if kind in ("context-directory", "context-git"):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("context_details", Path(__file__).with_name("context-details.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        provider = module.directory_details if kind == "context-directory" else module.git_details
+        result = (provider(request["cwd"], run, request["scratch"]) if kind == "context-directory"
+                  else provider(request["cwd"], run))
+        # Bound the serialized result as well as subprocess output. Long names
+        # can otherwise amplify a bounded raw response through JSON escaping.
+        while len(json.dumps(result, ensure_ascii=False).encode()) > 40000:
+            for field in ("files", "branches", "entries"):
+                if result.get(field):
+                    result[field].pop()
+                    result["truncated"] = True
+                    break
+            else:
+                raise ValueError("Context metadata exceeds the display limit")
+        return result
     if kind == "sources":
         return sources(request.get("config"))
     if kind == "preview":

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,9 +22,98 @@ def module(name):
 
 content = module('content-service')
 definitions = module('completion-definitions')
+details = module('context-details')
 
 
 class ContentTests(unittest.TestCase):
+    def test_directory_details_and_read_only_ranking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "parent ' 日本語"
+            root.mkdir()
+            child = root / "child\n$variable; '"
+            child.mkdir()
+            frequent = Path(directory) / "frequent"
+            frequent.mkdir()
+            scratch = Path(directory) / 'scratch'
+            scratch.mkdir()
+            database = Path(directory) / 'zoxide'
+            database.mkdir()
+            (database / 'db.zo').write_bytes(b'fixture database')
+            calls = []
+            def ranked(argv, cwd, extra_env):
+                calls.append((argv, cwd, extra_env))
+                self.assertEqual((Path(extra_env['_ZO_DATA_DIR']) / 'db.zo').read_bytes(), b'fixture database')
+                (Path(extra_env['_ZO_DATA_DIR']) / 'db.zo').write_bytes(b'query rewrote snapshot')
+                return str(frequent) + "\n" + str(root) + "\n"
+            with mock.patch.object(details.shutil, 'which', return_value='/fixture/zoxide'), mock.patch.dict(os.environ, {'_ZO_DATA_DIR': str(database)}):
+                result = details.directory_details(str(root), ranked, scratch)
+            paths = [row['path'] for row in result['entries']]
+            self.assertIn(str(child), paths)
+            self.assertIn(str(root.parent), paths)
+            self.assertIn(str(frequent), paths)
+            self.assertEqual(calls, [(['zoxide', 'query', '--list'], str(root), {'_ZO_DATA_DIR': str(scratch)})])
+            self.assertEqual((database / 'db.zo').read_bytes(), b'fixture database')
+            with mock.patch.object(details.shutil, 'which', return_value=None):
+                self.assertIn('unavailable', details.directory_details(str(root), ranked, scratch)['notice'])
+            for index in range(540):
+                (root / str(index)).touch()
+            with mock.patch.object(details.shutil, 'which', return_value=None):
+                result = details.directory_details(str(root), ranked, scratch)
+            self.assertTrue(result['truncated'])
+            self.assertLessEqual(len(result['entries']), 38)
+
+    def test_real_zoxide_snapshot_preserves_original(self):
+        if not details.shutil.which('zoxide'):
+            self.skipTest('zoxide is optional')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'visited'
+            target.mkdir()
+            database = root / 'database'
+            scratch = root / 'scratch'
+            scratch.mkdir()
+            env = os.environ | {'_ZO_DATA_DIR': str(database)}
+            subprocess.run(['zoxide', 'add', '--', str(target)], env=env, check=True)
+            original = (database / 'db.zo').read_bytes()
+            with mock.patch.dict(os.environ, {'_ZO_DATA_DIR': str(database)}):
+                result = details.directory_details(str(target), content.run, scratch)
+            self.assertEqual((database / 'db.zo').read_bytes(), original)
+            self.assertTrue((scratch / 'db.zo').is_file())
+            self.assertIn('Ranked by zoxide', result['notice'])
+
+    def test_git_context_rename_worktree_and_repository_overrides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo ' 日本語"
+            root.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(root), *args], stderr=subprocess.PIPE)
+            git('init', '-q', '--initial-branch=main')
+            original = 'old\nname.txt'
+            (root / original).write_text('fixture')
+            git('add', '--', original)
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
+            git('mv', '--', original, 'new\nname.txt')
+            (root / 'untracked').write_text('fixture')
+            git('branch', 'feature/日本語')
+            with mock.patch.dict(os.environ, {'GIT_DIR': '/missing/wrong-repository'}):
+                result = details.git_details(str(root), content.run)
+            self.assertEqual(result['root'], str(root))
+            self.assertEqual(result['total'], 2)
+            self.assertTrue(any('old\\nname.txt' in row and 'new\\nname.txt' in row for row in result['files']))
+            self.assertIn('feature/日本語', [row['name'] for row in result['branches']])
+            linked = Path(directory) / 'linked'
+            git('worktree', 'add', '-qb', 'linked', str(linked))
+            result = details.git_details(str(linked), content.run)
+            self.assertEqual(result['root'], str(linked))
+            self.assertTrue(any(row['name'] == 'linked' and row['current'] for row in result['branches']))
+            self.assertEqual(result['files'], [])
+            git('worktree', 'remove', '--force', str(linked))
+
+    def test_binary_provider_framing_and_bounds(self):
+        self.assertEqual(content.run([sys.executable, '-c', 'import sys; sys.stdout.buffer.write(bytes([97,0,98]))'], binary=True), b'a\0b')
+        with self.assertRaises(ValueError):
+            content.run([sys.executable, '-c', 'print("x"*50000)'], binary=True)
+
     def test_caret_scope(self):
         source = 'echo (task list)'
         for cursor in range(6, 15):

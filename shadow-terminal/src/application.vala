@@ -385,6 +385,24 @@ namespace Shadow {
             analysis.status.margin_end = 14;
             compose_box.append (analysis.status);
             context_bar = new ContextBar (host.preferences, shell_cwd);
+            context_bar.context_dismissed.connect (() => {
+                Idle.add (() => { if (!closing && is_active) focus_input (); return Source.REMOVE; });
+            });
+            context_bar.action_requested.connect ((action, origin) => {
+                if (!shell_editor || !input_session.ready || input_session.pending || !running || closing || shell_cwd != origin || !is_active) {
+                    feedback.label = "The context changed; reopen the control at a ready shell prompt.";
+                    feedback_bar.visible = true; return false;
+                }
+                if (editor.source () != "") {
+                    feedback.label = "The draft is occupied; clear or send it before preparing another command.";
+                    feedback_bar.visible = true; return false;
+                }
+                var command = action.command ();
+                if (command == "" || command.length > 65536) return false;
+                Gtk.TextIter end; editor.buffer.get_end_iter (out end);
+                editor.buffer.begin_user_action (); editor.buffer.insert (ref end, command, -1); editor.buffer.end_user_action ();
+                feedback_bar.visible = false; editor.grab_focus (); return true;
+            });
             compose_box.append (context_bar);
             compose_box.map.connect (context_bar.refresh_repository);
             compose_box.unmap.connect (context_bar.cancel);

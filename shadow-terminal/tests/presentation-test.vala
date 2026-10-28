@@ -25,6 +25,19 @@ private class SlowAnalysis : Shadow.FishAnalysis {
     }
 }
 
+private class SlowContextDetails : Shadow.ContextDetailsProvider {
+    public override async Json.Object query (Shadow.ContextDetailsKind kind, string directory, Cancellable cancel) throws Error {
+        Timeout.add (directory == "/old" ? 160 : 30, () => { query.callback (); return Source.REMOVE; });
+        yield;
+        // Ignore cancellation to verify that the view also rejects generations.
+        var entry = new Json.Object (); entry.set_string_member ("path", directory + "/child"); entry.set_string_member ("group", "Children");
+        var entries = new Json.Array (); entries.add_object_element (entry);
+        var result = new Json.Object (); result.set_array_member ("entries", entries);
+        result.set_boolean_member ("truncated", false); result.set_string_member ("notice", "Fixture");
+        return result;
+    }
+}
+
 private Shadow.Host? shared_host;
 
 private Shadow.Host test_host () throws Error {
@@ -294,6 +307,55 @@ int main (string[] args) {
         settle ();
         assert (analysis.starts == 2);
         window.destroy ();
+    });
+    Test.add_func ("/presentation/context-details-stale-results-and-draft-authority", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "context-actions", "--cwd", "/tmp", "--input", "composer", "--", "fish"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", " · context-actions$"});
+            run_private ({"xdotool", "windowfocus", "--sync", wid}); settle ();
+            session.running = true;
+            session.input_session.report (session.input_session.token, "ready", "/tmp");
+            var context = (Shadow.ContextBar) find_css (session, "composer-context");
+            var editor = find_editor (session);
+            var action = new Shadow.ContextAction (Shadow.ContextActionKind.DIRECTORY, "/tmp", "/tmp/日本語 ' literal");
+            editor.buffer.text = "unsubmitted draft";
+            assert (!context.action_requested (action, "/tmp")); assert (editor.source () == "unsubmitted draft");
+            editor.buffer.text = "";
+            assert (!context.action_requested (action, "/stale")); assert (editor.source () == "");
+            assert (context.action_requested (action, "/tmp"));
+            assert (editor.source () == action.command () && session.child_pid == 0);
+            string fixture = DirUtils.make_tmp ("shadow-context-action-XXXXXX");
+            string destination = Path.build_filename (fixture, "日本語 ' literal");
+            DirUtils.create (destination, 0700);
+            var literal_action = new Shadow.ContextAction (Shadow.ContextActionKind.DIRECTORY, fixture, destination);
+            assert (run_private ({"fish", "--no-config", "-c", literal_action.command () + "; pwd"}) == destination);
+            DirUtils.remove (destination); DirUtils.remove (fixture);
+
+            editor.buffer.undo (); assert (editor.source () == "");
+            session.input_session.report (session.input_session.token, "busy", "/tmp");
+            assert (!context.action_requested (action, "/tmp")); assert (editor.source () == "");
+            session.running = false;
+            var menu = new Gtk.MenuButton ();
+            var popup = new Shadow.ContextDetailsPopover (Shadow.ContextDetailsKind.DIRECTORY, new SlowContextDetails ());
+            Shadow.Native.menu_popover (menu, popup);
+            var parent = new Gtk.Window () {application = host, child = menu}; parent.present (); settle ();
+            menu.popup (); settle ();
+            popup.load.begin ("/old", true); popup.load.begin ("/new", true);
+            for (int i = 0; i < 3; i++) settle ();
+            var prepare = (Gtk.Button) find_css (popup, "context-prepare");
+            assert (((Gtk.Label) prepare.child).label == "/new/child");
+            string target = "";
+            popup.action_requested.connect ((chosen, origin) => { target = chosen.target; return true; });
+            prepare.clicked (); assert (target == "/new/child");
+            menu.popup (); popup.load.begin ("/old", true); menu.popdown ();
+            for (int i = 0; i < 2; i++) settle ();
+            assert (target == "/new/child");
+            parent.destroy (); window.close_workspace ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
     Test.add_func ("/presentation/documentation-source-navigation-and-source-preservation", () => {
         try {

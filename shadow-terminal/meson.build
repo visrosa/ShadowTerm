@@ -48,13 +48,13 @@ executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0
 app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/pane-tab.vala', 'src/session-history.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'src/context.vala',
-                    'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
+                    'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/context-details.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
 app_sources += native + files('src/gtk-native.vapi') + [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
            c_args: cflags, include_directories: app_includes, build_rpath: private_vte,
            install: true, install_rpath: private_vte)
 install_data('content-service.py', install_dir: helper_dir, install_mode: 'rwxr-xr-x')
-install_data('completion-definitions.py', install_dir: helper_dir)
+install_data('completion-definitions.py', 'context-details.py', install_dir: helper_dir)
 install_data('integration/fish.fish', install_dir: data_dir)
 install_data('data/io.github.visrosa.Vibrant.ShadowTerm.desktop',
              install_dir: get_option('datadir') / 'applications')

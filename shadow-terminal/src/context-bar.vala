@@ -7,6 +7,9 @@ namespace Shadow {
         public PromptContext prompt = new PromptContext ();
         private string directory = "";
         private bool ready = false;
+        private ContextDetailsPopover[] details = {};
+        public signal bool action_requested (ContextAction action, string origin_directory);
+        public signal void context_dismissed ();
         private Gtk.FlowBoxChild[] chips = {};
         private Gtk.Label[] labels = {};
         private const string[] KEYS = {"directory", "git", "result", "duration", "environment", "identity", "jobs"};
@@ -27,7 +30,17 @@ namespace Shadow {
                 var label = new Gtk.Label ("") {xalign = 0, ellipsize = Pango.EllipsizeMode.MIDDLE,
                     max_width_chars = i == 1 ? 48 : 28};
                 box.append (label);
-                var chip = new Gtk.FlowBoxChild () {child = box, focusable = false};
+                Gtk.Widget content = box;
+                if (i < 2) {
+                    var menu = new Gtk.MenuButton () {child = box, has_frame = false, direction = Gtk.ArrowType.NONE};
+                    var popup = new ContextDetailsPopover (i == 0 ? ContextDetailsKind.DIRECTORY : ContextDetailsKind.GIT);
+                    menu.tooltip_text = i == 0 ? "Browse directories" : "Inspect repository";
+                    popup.closed.connect (() => context_dismissed ());
+                    popup.action_requested.connect ((action, origin) => action_requested (action, origin));
+                    popup.map.connect (() => popup.load.begin (this.directory, ready));
+                    Native.menu_popover (menu, popup); details += popup; content = menu;
+                }
+                var chip = new Gtk.FlowBoxChild () {child = content, focusable = false};
                 chip.add_css_class ("context-" + KEYS[i]);
                 if (i == 2) chip.add_css_class ("error"); else chip.add_css_class ("dim-label");
                 flow.append (chip);
@@ -43,13 +56,16 @@ namespace Shadow {
             bool wanted = settings.context_visible ("enabled") && settings.context_visible ("git");
             bool newly_enabled = wanted && !repository.enabled;
             repository.enabled = wanted;
+            close_details ();
             update ();
             if (newly_enabled) refresh_repository ();
         }
 
-        public void set_ready (bool ready) { this.ready = ready; update (); }
+        private void close_details () { foreach (var popup in details) { popup.cancel (); popup.popdown (); } }
+        public void set_ready (bool ready) { if (this.ready != ready) close_details (); this.ready = ready; update (); }
 
         public void set_directory (string directory) {
+            if (this.directory != directory) close_details ();
             this.directory = directory;
             update ();
             refresh_repository ();
@@ -59,7 +75,7 @@ namespace Shadow {
             if (get_parent () != null && get_parent ().get_mapped () && repository.enabled && directory != "") repository.refresh.begin (directory);
         }
 
-        public void cancel () { repository.cancel (); }
+        public void cancel () { repository.cancel (); close_details (); }
 
         private void update () {
             string home = Environment.get_home_dir ();
