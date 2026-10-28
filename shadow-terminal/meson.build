@@ -47,7 +47,7 @@ executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0
            install: true, install_dir: helper_dir)
 app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
-                    'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/terminal-colors.vala', 'src/context.vala',
+                    'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'src/context.vala',
                     'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
 app_sources += native + files('src/gtk-native.vapi') + [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
@@ -73,7 +73,7 @@ completion_checks = configure_file(input: '../rich-input/tests/completion-test.v
                                    output: 'completion-test.vala', copy: true)
 completion_test = executable('completion-test', completion, completion_checks, dependencies: dependency('gio-2.0'))
 test('completion', completion_test)
-preferences_test = executable('preferences-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/preferences-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')])
+preferences_test = executable('preferences-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'tests/preferences-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')])
 test('preferences', preferences_test)
 context_test = executable('context-test', native, 'src/context.vala', 'src/prompt-context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
 test('repository-context', context_test)
@@ -83,7 +83,7 @@ test('fish-services', fish_services_test)
 editor_checks = configure_file(input: '../rich-input/tests/editor-test.vala',
                                output: 'editor-test.vala', copy: true)
 executable('editor-test', editor, completion, assistance, editor_checks, dependencies: dependency('gtk4'), install: false)
-executable('appearance-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/appearance-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')], install: false)
+executable('appearance-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'tests/appearance-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')], install: false)
 
 python = find_program('python3')
 test('content-services', python, args: [meson.current_source_dir() / 'tests/content-test.py'], timeout: 15)

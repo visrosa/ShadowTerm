@@ -360,9 +360,6 @@ namespace Shadow {
         private Gtk.Label status;
         private bool updating = false;
         private uint save_timeout = 0;
-        private string? recording;
-        private HashTable<string, Gtk.Button> shortcut_buttons = new HashTable<string, Gtk.Button> (str_hash, str_equal);
-        private ulong settings_handler;
 
         private Gtk.Box page () {
             return new Gtk.Box (Gtk.Orientation.VERTICAL, 18) {margin_start = 24, margin_end = 24, margin_top = 24, margin_bottom = 24};
@@ -399,7 +396,7 @@ namespace Shadow {
         }
 
         public PreferencesWindow (Gtk.Window parent, Preferences settings, bool style_fonts_available = false) {
-            Object (title: "Preferences", transient_for: parent, application: parent.application, modal: true, destroy_with_parent: true,
+            Object (title: "Preferences", transient_for: parent, application: parent.application, modal: false, destroy_with_parent: true,
                 default_width: 700, default_height: 680);
             this.settings = settings;
             var stack = new Gtk.Stack () {hhomogeneous = false, vhomogeneous = false, vexpand = true};
@@ -498,36 +495,10 @@ namespace Shadow {
             add_page (stack, input, "input", "Input");
 
             var shortcuts = page ();
-            var search = new Gtk.SearchEntry () {placeholder_text = "Find a shortcut…"}; shortcuts.append (search);
-            var bindings = group (shortcuts, "Keyboard shortcuts");
-            shortcuts.append (description ("Select a shortcut, then press the new combination. Escape cancels; Backspace disables it. Text editing and completion keys stay reserved."));
-            for (int i = 0; i < Preferences.ACTIONS.length; i++) {
-                string action = Preferences.ACTIONS[i];
-                var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
-                var button = new Gtk.Button () {label = settings.shortcut_label (action) == "" ? "Disabled" : settings.shortcut_label (action), width_request = 130};
-                button.clicked.connect (() => {
-                    recording = action; refresh_shortcut_labels ();
-                    status.label = "Press the new shortcut, Escape to cancel, or Backspace to disable.";
-                });
-                shortcut_buttons.insert (action, button);
-                var reset = new Gtk.Button.from_icon_name ("edit-undo-symbolic") {tooltip_text = "Restore default shortcut"};
-                reset.clicked.connect (() => {
-                    try { settings.reset_shortcut (action); status.label = ""; } catch (Error error) { status.label = error.message; }
-                });
-                buttons.append (button); buttons.append (reset);
-                row (bindings, Preferences.ACTION_LABELS[i], "", buttons);
-            }
-            bindings.set_filter_func ((candidate) => {
-                var box = candidate.child as Gtk.Box;
-                var labels = box.get_first_child () as Gtk.Box;
-                return ((Gtk.Label) labels.get_first_child ()).label.down ().contains (search.text.down ());
-            });
-            search.search_changed.connect (() => bindings.invalidate_filter ());
-            var reset_keys = new Gtk.Button.with_label ("Restore Shortcut Defaults") {halign = Gtk.Align.START};
-            reset_keys.clicked.connect (() => { try { settings.reset_shortcuts (); status.label = ""; } catch (Error error) { status.label = error.message; } }); shortcuts.append (reset_keys);
+            var shortcut_view = new ShortcutSettings (settings);
+            shortcut_view.feedback.connect ((message) => status.label = message);
+            shortcuts.append (shortcut_view);
             add_page (stack, shortcuts, "shortcuts", "Shortcuts");
-            settings_handler = settings.changed.connect (refresh_shortcut_labels);
-            ((Gtk.Widget) this).unrealize.connect (() => { if (settings_handler != 0) { settings.disconnect (settings_handler); settings_handler = 0; } });
 
             terminal.notify["font-desc"].connect (schedule_apply); editor.notify["font-desc"].connect (schedule_apply);
             pane_opacity.value_changed.connect (schedule_apply); lines.value_changed.connect (schedule_apply);
@@ -550,15 +521,7 @@ namespace Shadow {
             unmap.connect (flush);
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
-                if (recording != null) {
-                    if (key == Gdk.Key.Escape) { recording = null; status.label = ""; refresh_shortcut_labels (); return true; }
-                    if (key == Gdk.Key.Shift_L || key == Gdk.Key.Shift_R || key == Gdk.Key.Control_L || key == Gdk.Key.Control_R || key == Gdk.Key.Alt_L || key == Gdk.Key.Alt_R || key == Gdk.Key.Super_L || key == Gdk.Key.Super_R) return true;
-                    try {
-                        settings.set_shortcut (recording, key == Gdk.Key.BackSpace ? "" : Gtk.accelerator_name (key, state & Gtk.accelerator_get_default_mod_mask ()));
-                        recording = null; status.label = ""; refresh_shortcut_labels ();
-                    } catch (Error error) { status.label = error.message; }
-                    return true;
-                }
+                if (shortcut_view.handle_key (key, state)) return true;
                 if (key == Gdk.Key.Escape) { close (); return true; }
                 return false;
             }); ((Gtk.Widget) this).add_controller (keys);
@@ -615,13 +578,6 @@ namespace Shadow {
             }
         }
 
-        private void refresh_shortcut_labels () {
-            foreach (var action in shortcut_buttons.get_keys ()) {
-                var button = shortcut_buttons.lookup (action);
-                string label = settings.shortcut_label (action);
-                button.label = action == recording ? "Press shortcut…" : (label == "" ? "Disabled" : label);
-            }
-        }
         private void schedule_apply () {
             if (updating) return;
             if (save_timeout != 0) Source.remove (save_timeout);

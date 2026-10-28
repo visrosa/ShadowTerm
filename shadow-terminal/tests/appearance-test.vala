@@ -17,6 +17,7 @@ int main (string[] args) {
             var settings = new Shadow.Preferences (filename);
             var parent = new Gtk.Window () {title = "Isolated appearance test"};
             var dialog = new Shadow.PreferencesWindow (parent, settings);
+            assert (!dialog.modal && dialog.transient_for == parent);
             parent.present (); dialog.present ();
             var capture_loop = new MainLoop ();
             Timeout.add (80, () => { capture_loop.quit (); return Source.REMOVE; }); capture_loop.run ();
@@ -66,6 +67,40 @@ int main (string[] args) {
             assert (loaded.foreground == fg.to_string () && loaded.background == bg.to_string ());
             parent.destroy ();
             FileUtils.unlink (filename);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+        if (directory != null) DirUtils.remove (directory);
+    });
+    Test.add_func ("/appearance/shortcut-capture-categories-and-cancellation", () => {
+        string? directory = null;
+        try {
+            directory = DirUtils.make_tmp ("shadow-shortcut-ui-XXXXXX");
+            var settings = new Shadow.Preferences (Path.build_filename (directory, "preferences.ini"));
+            var parent = new Gtk.Window ();
+            var dialog = new Shadow.PreferencesWindow (parent, settings);
+            var pages = (Gtk.Stack) ((Gtk.Box) dialog.child).get_first_child ();
+            pages.visible_child_name = "shortcuts"; parent.present (); dialog.present ();
+            var loop = new MainLoop ();
+            Timeout.add (100, () => { loop.quit (); return Source.REMOVE; }); loop.run ();
+            var view = (Shadow.ShortcutSettings) find_control (dialog.child, "pref-shortcuts");
+            var content = view.get_first_child ().get_next_sibling ();
+            assert (content.get_first_child () is Gtk.StackSidebar);
+            var categories = (Gtk.Stack) content.get_last_child ();
+            assert (categories.get_pages ().get_n_items () == 5);
+            var row = (Gtk.ListBoxRow) ((Gtk.ListBox) categories.visible_child).get_first_child ();
+            var capture = (Gtk.Button) row.child.get_first_child ().get_next_sibling ();
+            assert (capture.child is Gtk.ShortcutLabel);
+            string original = settings.shortcut ("new-tab");
+            capture.clicked ();
+            assert (view.handle_key (Gdk.Key.Escape, 0) && settings.shortcut ("new-tab") == original);
+            capture.clicked (); assert (view.handle_key (Gdk.Key.q, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK));
+            assert (settings.shortcut ("new-tab") == original);
+            assert (((Gtk.Label) find_control (dialog.child, "pref-status")).label.has_prefix ("Already assigned"));
+            assert (view.handle_key (Gdk.Key.BackSpace, 0) && settings.shortcut ("new-tab") == "");
+            capture.clicked (); pages.visible_child_name = "input";
+            assert (!view.handle_key (Gdk.Key.x, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK));
+            settings.reset_shortcut ("new-tab");
+            dialog.close (); parent.destroy ();
+            FileUtils.unlink (Path.build_filename (directory, "preferences.ini"));
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);
     });
