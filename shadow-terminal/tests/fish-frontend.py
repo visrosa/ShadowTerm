@@ -284,7 +284,7 @@ def worker(tmp):
         text(f"begin; read --prompt 'printf reader' --local vcom_reader_line; printf '%s\\n' \"$vcom_reader_line\" > {tmp}/program-composer-input; read --prompt 'printf again' --local vcom_reader_next; printf '%s\\n' \"$vcom_reader_next\" > {tmp}/program-composer-next; end")
         xdo("key", "Return")
         time.sleep(0.15)
-        xdo("key", "ctrl+shift+m", "ctrl+shift+m")
+        # Runtime-enabled Composer retains focus across command execution.
         text("vcomsay literal $value; program text")
         xdo("key", "Return")
         harness.wait_for(lambda: read("program-composer-input") == "vcomsay literal $value; program text\n", "foreground Composer Enter without abbreviation expansion")

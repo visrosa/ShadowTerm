@@ -41,10 +41,8 @@ int main (string[] args) {
             assert (!classic.composer_enabled ());
             var command = Shadow.Request.parse ({"shadow-term", "--", "fish", "-c", "echo hi"});
             assert (!command.composer_enabled ());
-            try {
-                Shadow.Request.parse ({"shadow-term", "--input", "composer", "--", "sh"});
-                Test.fail ();
-            } catch (Error error) {}
+            var other = Shadow.Request.parse ({"shadow-term", "--input", "composer", "--", "sh"});
+            assert (other.composer_enabled () && !other.supports_composer ());
         } catch (Error error) { Test.fail (); }
     });
     return Test.run ();

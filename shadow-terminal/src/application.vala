@@ -143,7 +143,7 @@ namespace Shadow {
                 terminal.get ("shadow-alternate-screen", out alternate_screen);
                 alternate_composer_override = false;
                 update_composer_visibility ();
-                if (alternate_screen && editor.has_focus) terminal.grab_focus ();
+                if (is_active) focus_input ();
             });
             editor.notify["has-focus"].connect (update_terminal_cursor);
 
@@ -182,6 +182,16 @@ namespace Shadow {
                     var adjustment = terminal.vadjustment;
                     adjustment.value += (key == Gdk.Key.Page_Up ? -1 : 1) * adjustment.page_increment;
                     return true;
+                }
+                if (editor.has_focus && !input_session.ready && !input_session.pending &&
+                    (state & Gtk.accelerator_get_default_mod_mask ()) == Gdk.ModifierType.CONTROL_MASK) {
+                    uint lower = Gdk.keyval_to_lower (key);
+                    if (lower == Gdk.Key.c && !editor.buffer.has_selection) {
+                        terminal.feed_child ("\x03".data); return true;
+                    }
+                    if (lower == Gdk.Key.d && editor.source () == "") {
+                        terminal.feed_child ("\x04".data); return true;
+                    }
                 }
                 if (shell_editor && editor.has_focus && input_session.ready &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK) {
@@ -466,8 +476,7 @@ namespace Shadow {
                 if (running) feedback_bar.visible = input_session.pending;
                 if (input_session.pending) feedback.label = "Waiting for fish to accept input…";
                 if (is_active) {
-                    if (became_ready && composer.reveal_child) editor.grab_focus ();
-                    else if (became_busy) terminal.grab_focus ();
+                    if (became_ready || became_busy) focus_input ();
                 }
             }
         }
@@ -907,7 +916,7 @@ namespace Shadow {
         }
 
         public void focus_input () {
-            if (shell_editor && input_session.ready && composer.reveal_child) editor.grab_focus ();
+            if (composer.reveal_child) editor.grab_focus ();
             else terminal.grab_focus ();
         }
 

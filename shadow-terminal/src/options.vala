@@ -77,8 +77,6 @@ namespace Shadow {
                     throw new OptionError.INVALID ("Invalid session name: %s", r.session);
             if (!FileUtils.test (r.cwd, FileTest.IS_DIR))
                 throw new OptionError.INVALID ("Working directory does not exist: %s", r.cwd);
-            if (r.input_mode == "composer" && !r.supports_composer ())
-                throw new OptionError.INVALID ("Composer input requires an interactive fish command");
             if ((r.action == "hide" || r.action == "quit" || r.action == "list") && r.configured)
                 throw new OptionError.INVALID ("This action does not accept launch options");
             return r;
@@ -105,7 +103,7 @@ namespace Shadow {
             return true;
         }
 
-        public bool composer_enabled () { return input_mode != "terminal" && supports_composer (); }
+        public bool composer_enabled () { return input_mode == "composer" || (input_mode == "auto" && supports_composer ()); }
 
         public string encode () {
             var b = new Json.Builder ();
