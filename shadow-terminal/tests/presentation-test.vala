@@ -118,6 +118,60 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/session-display-titles", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "title-a", "--cwd", "/tmp"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var first = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (first); window.present_session (first); settle ();
+            assert (first.display_title == "tmp" && window.title == "tmp · title-a");
+            var draft = find_editor (first); draft.buffer.text = "unsubmitted 日本語";
+            var emulator = first.terminal;
+            var token = first.input_session.token;
+            first.terminal.feed ("\x1b]2;Editor 日本語 <b>literal</b>\x07".data); settle ();
+            assert (first.display_title == "Editor 日本語 <b>literal</b>");
+            var tab = (Gtk.ToggleButton) find_css (window.titlebar, "workspace-tab").get_first_child ();
+            assert (((Gtk.Label) tab.child).label == first.display_title);
+            assert (!((Gtk.Label) tab.child).use_markup);
+            assert (tab.tooltip_text == first.title + "\n/tmp");
+            assert (window.title == first.title);
+            first.terminal.feed ("\x1b]2;\x07".data); settle ();
+            assert (first.display_title == "tmp");
+            first.terminal.feed ("\x1b]2;Stale program\x07".data); settle ();
+            first.shell_directory ("/tmp/日本語");
+            assert (first.display_title == "日本語" && window.title == "日本語 · title-a");
+            first.shell_directory ("/");
+            assert (first.display_title == "/");
+            first.terminal.feed ("\x1b]2;New title\x07".data); settle ();
+            assert (first.display_title == "New title");
+            string long_title = string.nfill (300, 'x') + "日本語";
+            first.terminal.feed (("\x1b]2;" + long_title + "\x07").data); settle ();
+            assert (first.display_title.char_count () == 160 && first.display_title.validate ());
+            first.terminal.feed ("\x1b]2;left\u202eright\x07".data); settle ();
+            assert (first.display_title == "leftright");
+
+            var second_request = Shadow.Request.parse ({"shadow-term", "--session", "title-b", "--cwd", "/tmp", "--title", "Initial"});
+            var second = new Shadow.TerminalSession (host, window, second_request, Environ.get ());
+            window.add_session (second); window.present_session (second); settle ();
+            assert (second.display_title == "Initial" && window.title == "Initial · title-b");
+            first.terminal.feed ("\x1b]2;Background\x07".data); settle ();
+            assert (first.display_title == "Background" && window.title == second.title);
+            window.move_to_tab (first); window.join_previous_tab (); settle ();
+            window.present_session (second);
+            first.terminal.feed ("\x1b]2;Inactive split\x07".data); settle ();
+            assert (window.title == second.title);
+            window.present_session (first); settle ();
+            assert (window.title == first.title);
+            tab = (Gtk.ToggleButton) find_css (window.titlebar, "workspace-tab").get_first_child ();
+            assert (((Gtk.Label) tab.child).label == "Inactive split · 2");
+            host.detach_session (first); settle ();
+            assert (first.window != window && first.window.title == first.title);
+            assert (first.terminal == emulator && first.input_session.token == token && first.child_pid == 0);
+            assert (draft.source () == "unsubmitted 日本語");
+            first.window.close_workspace (); window.close_workspace (); settle ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/session-layout-transfer-and-focus", () => {
         try {
             var host = test_host ();

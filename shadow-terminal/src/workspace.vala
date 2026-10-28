@@ -191,7 +191,7 @@ namespace Shadow {
             var current = tab.active ?? session;
             if (row != null) {
                 var select = (Gtk.ToggleButton) row.get_first_child ();
-                string caption = current.directory == "/" ? "/" : Path.get_basename (current.directory);
+                string caption = current.display_title;
                 int count = (int) tab.members ().length ();
                 ((Gtk.Label) select.child).label = caption + (count > 1 ? " · %d".printf (count) : "");
                 select.tooltip_text = current.title + "\n" + current.directory;

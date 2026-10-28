@@ -68,7 +68,9 @@ namespace Shadow {
         private TerminalContext terminal_context;
         public weak WorkspaceWindow window;
         public Gtk.MenuButton menu;
-        public string title { get; set; }
+        public string title { get; private set; }
+        public string display_title { get; private set; }
+        private string application_title = "";
         public bool is_active { get { return window.is_active && window.active_session == this; } }
         public bool is_presented { get { return window.contains_visible (this); } }
         public string directory { get { return shell_cwd; } }
@@ -83,7 +85,8 @@ namespace Shadow {
             shell_editor = request.supports_composer ();
             this.environment = environment;
             add_css_class ("shadow-terminal");
-            title = "%s · %s".printf (request.title, request.session);
+            application_title = request.title == "Shadow Term" ? "" : plain_title (request.title);
+            refresh_title ();
 
             terminal = new Vte.Terminal () {hexpand = true, vexpand = true};
             terminal.set_font (Pango.FontDescription.from_string ("monospace 12"));
@@ -217,8 +220,8 @@ namespace Shadow {
                 if (prop != Vte.TERMPROP_XTERM_TITLE) return;
                 size_t title_size;
                 var child_title = terminal.get_termprop_string (prop, out title_size);
-                if (child_title != null && child_title != "")
-                    title = "%s · %s".printf (child_title, request.session);
+                application_title = plain_title (child_title ?? "");
+                refresh_title ();
             });
             terminal.child_exited.connect ((status) => {
                 input_session.reset ();
@@ -565,8 +568,33 @@ namespace Shadow {
             } catch (IOError error) { feedback.label = error.message; feedback_bar.visible = true; }
         }
 
+        // Titles are untrusted presentation data, independent of stable session
+        // identity. Bound Unicode characters rather than cutting UTF-8 bytes.
+        private static string plain_title (string text) {
+            var result = new StringBuilder ();
+            int offset = 0;
+            unichar character;
+            int count = 0;
+            while (text.get_next_char (ref offset, out character) && count < 160) {
+                if (character.iscntrl () || character.type () == UnicodeType.FORMAT) continue;
+                result.append_unichar (character.isspace () ? ' ' : character);
+                count++;
+            }
+            return result.str.strip ();
+        }
+
+        private void refresh_title () {
+            string fallback = plain_title (shell_cwd == "/" ? "/" : Path.get_basename (shell_cwd));
+            display_title = application_title != "" ? application_title : (fallback != "" ? fallback : "/");
+            title = "%s · %s".printf (display_title, request.session);
+        }
+
         public void shell_directory (string directory) {
             shell_cwd = directory;
+            // Only authenticated outer-shell prompt reports reach this method.
+            // A program's last OSC title must not survive return to the prompt.
+            application_title = "";
+            refresh_title ();
             window.update_session (this);
             editor.working_directory = directory;
             context_bar.set_directory (directory);
