@@ -163,7 +163,7 @@ namespace Shadow {
             launcher.setenv ("VCOM_FUNCTION_PATH", function_path, true);
             launcher.setenv ("fish_history", "", true);
             launcher.set_child_setup (() => { Posix.setsid (); });
-            var process = launcher.spawnv (argv);
+            var process = Shadow.Native.spawn (launcher, argv);
             int pid = int.parse (process.get_identifier ());
             uint deadline = Timeout.add (1200, () => { cancel.cancel (); return Source.REMOVE; });
             try {

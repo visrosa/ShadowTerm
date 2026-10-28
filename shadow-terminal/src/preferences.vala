@@ -63,7 +63,7 @@ namespace Shadow {
         }
 
         public void set_shortcut (string action, string value) throws Error {
-            if (!(action in ACTIONS)) throw new IOError.INVALID_ARGUMENT ("Unknown action");
+            if (index_of_action (action) < 0) throw new IOError.INVALID_ARGUMENT ("Unknown action");
             string normalized;
             if (value == DEFAULT_KEYS[index_of_action (action)]) {
                 uint key = 0; Gdk.ModifierType mods = 0;
@@ -86,7 +86,7 @@ namespace Shadow {
         }
 
         public void reset_shortcut (string action) throws Error {
-            if (!(action in ACTIONS)) throw new IOError.INVALID_ARGUMENT ("Unknown action");
+            if (index_of_action (action) < 0) throw new IOError.INVALID_ARGUMENT ("Unknown action");
             // Restore through conflict validation, allowing the action's own
             // reserved default while keeping other assignments unambiguous.
             set_shortcut (action, DEFAULT_KEYS[index_of_action (action)]);
@@ -245,7 +245,8 @@ namespace Shadow {
         }
 
         private static string valid_cursor_shape (string value) {
-            return value in CURSOR_SHAPES ? value : "block";
+            foreach (var shape in CURSOR_SHAPES) if (value == shape) return value;
+            return "block";
         }
 
         public void set_cursor_shape (string value) throws Error {
@@ -274,7 +275,8 @@ namespace Shadow {
         private void save () throws Error {
             var file = new KeyFile ();
             colors.save (file);
-            shortcuts.foreach ((action, value) => file.set_string ("shortcuts", action, value));
+            foreach (var action in shortcuts.get_keys ())
+                file.set_string ("shortcuts", action, shortcuts.lookup (action));
             file.set_string ("appearance", "terminal-font", terminal_font);
             file.set_string ("appearance", "bold-font", bold_font);
             file.set_string ("appearance", "italic-font", italic_font);
@@ -343,7 +345,7 @@ namespace Shadow {
         private Gtk.FontDialogButton editor;
         private Gtk.FontDialogButton[] faces = {};
         private Gtk.CheckButton[] custom_faces = {};
-        private Gtk.Scale opacity;
+        private Gtk.Scale pane_opacity;
         private Gtk.SpinButton lines;
         private Gtk.DropDown cursor_shape;
         private Gtk.Switch inherit_style;
@@ -414,7 +416,7 @@ namespace Shadow {
             editor = new Gtk.FontDialogButton (new Gtk.FontDialog () {title = "Composer Font"}) {font_desc = Pango.FontDescription.from_string (settings.editor_font)};
             row (fonts, "Pane font", "The regular face determines terminal cell size.", terminal, "pref-terminal-font");
             row (fonts, "Composer font", "Independent text size and family.", editor, "pref-editor-font");
-            cursor_shape = new Gtk.DropDown.from_strings ({"Block", "I-beam", "Underline"});
+            cursor_shape = (Gtk.DropDown) Native.drop_down ({"Block", "I-beam", "Underline"});
             for (int i = 0; i < Preferences.CURSOR_SHAPES.length; i++)
                 if (Preferences.CURSOR_SHAPES[i] == settings.cursor_shape) cursor_shape.selected = i;
             row (fonts, "Pane cursor shape", "Applications can request their own cursor shape.", cursor_shape, "pref-cursor-shape");
@@ -440,11 +442,11 @@ namespace Shadow {
             Gdk.RGBA fg = {}, bg = {}; fg.parse (settings.foreground); bg.parse (settings.background);
             foreground = new Gtk.ColorDialogButton (new Gtk.ColorDialog () {title = "Pane Text", with_alpha = false}) {rgba = fg, sensitive = !settings.system_colors};
             background = new Gtk.ColorDialogButton (new Gtk.ColorDialog () {title = "Pane Background", with_alpha = false}) {rgba = bg, sensitive = !settings.system_colors};
-            opacity = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, 100, 1) {draw_value = true, digits = 0, width_request = 170}; opacity.set_value (settings.opacity * 100);
+            pane_opacity = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, 100, 1) {draw_value = true, digits = 0, width_request = 170}; pane_opacity.set_value (settings.opacity * 100);
             header_boost = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, 100, 1) {draw_value = true, digits = 0, width_request = 170, sensitive = settings.inherit_style}; header_boost.set_value (settings.header_opacity_boost * 100);
             row (colors, "Use system colors", "Follow the desktop light or dark appearance.", system_colors, "pref-system-colors");
             row (colors, "Pane text", "", foreground, "pref-foreground"); row (colors, "Pane background", "", background, "pref-background");
-            row (colors, "Background opacity", "Transparency depends on the compositor.", opacity, "pref-opacity");
+            row (colors, "Background opacity", "Transparency depends on the compositor.", pane_opacity, "pref-opacity");
             row (colors, "Inherit Pane Style", "Unify Composer and header colors and opacity.", inherit_style, "pref-inherit");
             row (colors, "Header opacity boost", "0% matches the Pane; 100% makes the header opaque.", header_boost, "pref-header-boost");
             var theme_group = group (appearance, "Terminal color scheme");
@@ -528,7 +530,7 @@ namespace Shadow {
             ((Gtk.Widget) this).unrealize.connect (() => { if (settings_handler != 0) { settings.disconnect (settings_handler); settings_handler = 0; } });
 
             terminal.notify["font-desc"].connect (schedule_apply); editor.notify["font-desc"].connect (schedule_apply);
-            opacity.value_changed.connect (schedule_apply); lines.value_changed.connect (schedule_apply);
+            pane_opacity.value_changed.connect (schedule_apply); lines.value_changed.connect (schedule_apply);
             inherit_style.notify["active"].connect (() => { header_boost.sensitive = inherit_style.active; schedule_apply (); });
             system_colors.notify["active"].connect (() => { update_color_sensitivity (); schedule_apply (); });
             foreground.notify["rgba"].connect (schedule_apply); background.notify["rgba"].connect (schedule_apply); header_boost.value_changed.connect (schedule_apply);
@@ -537,7 +539,7 @@ namespace Shadow {
                 updating = true;
                 terminal.font_desc = Pango.FontDescription.from_string ("Monospace 12"); editor.font_desc = Pango.FontDescription.from_string ("Monospace 12");
                 foreach (var custom in custom_faces) custom.active = false;
-                opacity.set_value (100); lines.value = 10000; inherit_style.active = system_colors.active = true;
+                pane_opacity.set_value (100); lines.value = 10000; inherit_style.active = system_colors.active = true;
                 cursor_shape.selected = 0;
                 Gdk.RGBA reset_fg = {}, reset_bg = {}; reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b"); foreground.rgba = reset_fg; background.rgba = reset_bg; header_boost.set_value (0);
                 load_color_controls (new TerminalColors ());
@@ -614,10 +616,11 @@ namespace Shadow {
         }
 
         private void refresh_shortcut_labels () {
-            shortcut_buttons.foreach ((action, button) => {
+            foreach (var action in shortcut_buttons.get_keys ()) {
+                var button = shortcut_buttons.lookup (action);
                 string label = settings.shortcut_label (action);
                 button.label = action == recording ? "Press shortcut…" : (label == "" ? "Disabled" : label);
-            });
+            }
         }
         private void schedule_apply () {
             if (updating) return;
@@ -633,7 +636,7 @@ namespace Shadow {
                 var colors = new TerminalColors ();
                 for (int i = 0; i < color_controls.length; i++)
                     colors.set_color (i, i >= 16 && automatic_colors[i].active ? "" : color_controls[i].get_rgba ().to_string ());
-                settings.apply (terminal.font_desc.to_string (), editor.font_desc.to_string (), opacity.get_value () / 100,
+                settings.apply (terminal.font_desc.to_string (), editor.font_desc.to_string (), pane_opacity.get_value () / 100,
                     (int64) lines.value, inherit_style.active, system_colors.active, foreground.get_rgba ().to_string (), background.get_rgba ().to_string (), header_boost.get_value () / 100, colors);
                 settings.set_style_fonts (custom_faces[0].active ? faces[0].font_desc.to_string () : "",
                     custom_faces[1].active ? faces[1].font_desc.to_string () : "", custom_faces[2].active ? faces[2].font_desc.to_string () : "");

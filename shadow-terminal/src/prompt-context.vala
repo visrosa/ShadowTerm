@@ -64,7 +64,7 @@ namespace Shadow {
         public string duration_summary () {
             if (!has_result || duration_ms < 1000) return "";
             if (duration_ms < 60000) return "%.1f s".printf (duration_ms / 1000.0);
-            return "%lld m %02lld s".printf (duration_ms / 60000, (duration_ms / 1000) % 60);
+            return ("%" + int64.FORMAT + " m %02" + int64.FORMAT + " s").printf (duration_ms / 60000, (duration_ms / 1000) % 60);
         }
 
         public string environment_summary () {

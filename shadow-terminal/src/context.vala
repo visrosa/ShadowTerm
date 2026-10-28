@@ -36,7 +36,7 @@ namespace Shadow {
                 // An exported repository override belongs to its caller, not
                 // necessarily to the directory reported by this shell session.
                 foreach (var key in new string[] {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"}) launcher.unsetenv (key);
-                process = launcher.spawnv ({"git", "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "-z",
+                process = Shadow.Native.spawn (launcher, {"git", "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "-z",
                     "--branch", "--show-stash", "--untracked-files=normal", "--ignore-submodules=all"});
                 var bytes = new ByteArray ();
                 while (true) {

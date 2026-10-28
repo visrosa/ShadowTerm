@@ -53,11 +53,11 @@ namespace Shadow {
             return node;
         }
         private static HashTable<string, string> dictionary (Xml.Node* node) throws Error {
-            if (node == null || node->name != "dict") throw new IOError.INVALID_DATA ("Expected an iTerm2 color dictionary");
+            if (node == null || (string) node->name != "dict") throw new IOError.INVALID_DATA ("Expected an iTerm2 color dictionary");
             var result = new HashTable<string, string> (str_hash, str_equal);
             for (var key = element (node->children); key != null;) {
                 var value = element (key->next);
-                if (key->name != "key" || value == null) throw new IOError.INVALID_DATA ("Invalid iTerm2 dictionary");
+                if ((string) key->name != "key" || value == null) throw new IOError.INVALID_DATA ("Invalid iTerm2 dictionary");
                 string name = key->get_content ();
                 if (result.contains (name)) throw new IOError.INVALID_DATA ("Duplicate iTerm2 key: " + name);
                 result.insert (name, value->get_content ());
@@ -89,7 +89,7 @@ namespace Shadow {
             if (doc == null) throw new IOError.INVALID_DATA ("Could not read the XML iTerm2 preset");
             try {
                 var root = doc->get_root_element ();
-                if (root == null || root->name != "plist") throw new IOError.INVALID_DATA ("Expected an XML iTerm2 plist");
+                if (root == null || (string) root->name != "plist") throw new IOError.INVALID_DATA ("Expected an XML iTerm2 plist");
                 var dict = element (root->children);
                 dictionary (dict);
                 if (element (dict->next) != null) throw new IOError.INVALID_DATA ("Expected one preset dictionary");

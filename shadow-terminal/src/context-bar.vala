@@ -68,7 +68,7 @@ namespace Shadow {
                 ready ? prompt.duration_summary () : "", prompt.environment_summary (), prompt.identity_summary (),
                 prompt.jobs > 0 ? "%d %s".printf (prompt.jobs, prompt.jobs == 1 ? "job" : "jobs") : ""};
             string[] detail = {directory, repository.detail, "Last command exit: %d · pipeline: %s".printf (prompt.exit_status, prompt.pipeline),
-                "Last command duration: %lld ms".printf (prompt.duration_ms),
+                ("Last command duration: %" + int64.FORMAT + " ms").printf (prompt.duration_ms),
                 "Python environment: %s\nConda environment: %s".printf (prompt.virtual_env, prompt.conda_env),
                 prompt.ssh ? "SSH session · " + prompt.identity_summary () : "Local session · " + prompt.identity_summary (),
                 "Background jobs at the last shell prompt"};

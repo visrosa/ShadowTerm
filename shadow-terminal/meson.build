@@ -1,5 +1,10 @@
 project('shadow-term', 'vala', 'c', version: '0.0.9')
 
+# GLib 2.76 is already required by the GTK baseline. Modern code generation
+# avoids obsolete volatile one-time initialization declarations.
+add_project_arguments('--target-glib=2.76', language: 'vala')
+native = files('src/native.vapi')
+
 private_vte = get_option('vte-library-dir')
 if private_vte != '' and not import('fs').is_file(private_vte / 'libvte-2.91-gtk4.so')
   error('Prepare the private VTE library before setting vte-library-dir')
@@ -44,7 +49,7 @@ app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.v
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/terminal-colors.vala', 'src/context.vala',
                     'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
-app_sources += [paths, editor, completion, assistance, resources]
+app_sources += native + files('src/gtk-native.vapi') + [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
            c_args: cflags, include_directories: app_includes, build_rpath: private_vte,
            install: true, install_rpath: private_vte)
@@ -68,17 +73,17 @@ completion_checks = configure_file(input: '../rich-input/tests/completion-test.v
                                    output: 'completion-test.vala', copy: true)
 completion_test = executable('completion-test', completion, completion_checks, dependencies: dependency('gio-2.0'))
 test('completion', completion_test)
-preferences_test = executable('preferences-test', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/preferences-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')])
+preferences_test = executable('preferences-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/preferences-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')])
 test('preferences', preferences_test)
-context_test = executable('context-test', 'src/context.vala', 'src/prompt-context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
+context_test = executable('context-test', native, 'src/context.vala', 'src/prompt-context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
 test('repository-context', context_test)
-fish_services_test = executable('fish-services-test', 'src/fish-services.vala', 'src/content-client.vala', test_paths, completion, 'tests/fish-services-test.vala',
+fish_services_test = executable('fish-services-test', native, 'src/fish-services.vala', 'src/content-client.vala', test_paths, completion, 'tests/fish-services-test.vala',
                                dependencies: [dependency('gio-2.0'), dependency('json-glib-1.0')], vala_args: ['--pkg=posix'])
 test('fish-services', fish_services_test)
 editor_checks = configure_file(input: '../rich-input/tests/editor-test.vala',
                                output: 'editor-test.vala', copy: true)
 executable('editor-test', editor, completion, assistance, editor_checks, dependencies: dependency('gtk4'), install: false)
-executable('appearance-test', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/appearance-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')], install: false)
+executable('appearance-test', native, 'src/gtk-native.vapi', 'src/preferences.vala', 'src/terminal-colors.vala', 'tests/appearance-test.vala', 'tests/theme-fixture.vala', dependencies: [dependency('gtk4'), dependency('libxml-2.0')], install: false)
 
 python = find_program('python3')
 test('content-services', python, args: [meson.current_source_dir() / 'tests/content-test.py'], timeout: 15)

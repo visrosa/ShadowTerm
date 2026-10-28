@@ -5,7 +5,7 @@ private void git (string directory, string[] arguments, int expected = 0) throws
     launcher.setenv ("GIT_CONFIG_NOSYSTEM", "1", true);
     string[] command = {"git"};
     foreach (string arg in arguments) command += arg;
-    var child = launcher.spawnv (command);
+    var child = Shadow.Native.spawn (launcher, command);
     child.wait ();
     assert (child.get_if_exited () && child.get_exit_status () == expected);
 }
@@ -43,7 +43,7 @@ int main (string[] args) {
             assert (context.summary == "");
             FileUtils.unlink (Path.build_filename (directory, "file"));
             // Git owns this fixture's private metadata; remove only its temp tree.
-            var cleanup = new Subprocess.newv ({"rm", "-rf", "--", directory}, SubprocessFlags.NONE);
+            var cleanup = Shadow.Native.subprocess ({"rm", "-rf", "--", directory}, SubprocessFlags.NONE);
             cleanup.wait_check ();
             directory = null;
         } catch (Error error) { Test.message (error.message); Test.fail (); }
@@ -93,7 +93,7 @@ int main (string[] args) {
             context.enabled = false;
             refresh (context, directory);
             assert (context.summary == "");
-            var cleanup = new Subprocess.newv ({"rm", "-rf", "--", directory}, SubprocessFlags.NONE);
+            var cleanup = Shadow.Native.subprocess ({"rm", "-rf", "--", directory}, SubprocessFlags.NONE);
             cleanup.wait_check (); directory = null;
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);

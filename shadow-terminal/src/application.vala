@@ -302,7 +302,7 @@ namespace Shadow {
             menu_item (box, popover, "Close Pane", "Ctrl+W", end_session);
             menu_item (box, popover, "Close Tab", "Ctrl+Shift+W", () => window.close_tab ());
             menu_item (box, popover, "Close Window", "Ctrl+Shift+Q", () => window.close_workspace ());
-            popover.child = box; menu.popover = popover;
+            popover.child = box; Native.menu_popover (menu, popover);
             return menu;
         }
 
@@ -340,7 +340,7 @@ namespace Shadow {
             var tools = new Gtk.Box (Gtk.Orientation.VERTICAL, 8) {margin_start = 12, margin_end = 12, margin_top = 12, margin_bottom = 12};
             var style_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
             style_row.append (new Gtk.Label ("Presentation") {hexpand = true, xalign = 0});
-            mode = new Gtk.DropDown.from_strings ({"Markdown", "Fish"});
+            mode = (Gtk.DropDown) Native.drop_down ({"Markdown", "Fish"});
             mode.selected = shell_editor ? 1 : 0;
             mode.notify["selected"].connect (() => { editor.fish_mode = mode.selected == 1; });
             style_row.append (mode); tools.append (style_row);
@@ -366,7 +366,7 @@ namespace Shadow {
                 child = preview, max_content_height = 140, max_content_width = 480, propagate_natural_height = true}};
             preview_card = new Gtk.Revealer () {child = last_input, transition_duration = 0};
             tools.append (preview_card);
-            popover.child = tools; options.popover = popover;
+            popover.child = tools; Native.menu_popover (options, popover);
             row.append (cancel_button); row.append (submit_button); row.append (options);
             compose_box.append (row);
             analysis.status.margin_start = 42;
@@ -651,7 +651,7 @@ namespace Shadow {
 
         private Gtk.Revealer create_search () {
             search_entry = new Gtk.SearchEntry () {hexpand = true, placeholder_text = "Find literal text"};
-            search_target = new Gtk.DropDown.from_strings ({"Terminal", "Composer"});
+            search_target = (Gtk.DropDown) Native.drop_down ({"Terminal", "Composer"});
             var previous = new Gtk.Button.from_icon_name ("go-up-symbolic") {tooltip_text = "Previous Match (Shift+Enter)"};
             var next = new Gtk.Button.from_icon_name ("go-down-symbolic") {tooltip_text = "Next Match (Enter)"};
             var close = new Gtk.Button.from_icon_name ("window-close-symbolic") {tooltip_text = "Close Search (Escape)"};
@@ -1114,7 +1114,7 @@ namespace Shadow {
                     invocation.printerr ("Session not found: %s\n", r.session);
                     return 1;
                 }
-                open_session (r, invocation.get_environ ());
+                open_session (r, Native.environment (invocation));
                 return 0;
             } catch (Error error) {
                 invocation.printerr ("%s\n", error.message);
