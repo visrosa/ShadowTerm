@@ -8,4 +8,3 @@ private string theme_preset (bool optional = true) {
     xml.append ("<key>Unrelated setting</key><true/></dict></plist>");
     return xml.str;
 }
-

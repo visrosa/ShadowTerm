@@ -375,6 +375,42 @@ int main (string[] args) {
             window.destroy ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
+    Test.add_func ("/presentation/live-terminal-palette", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--input", "terminal", "--", "fish"});
+            request.session = "private-palette-test";
+            request.width = 920; request.height = 650;
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session);
+            var colors = new Shadow.TerminalColors ();
+            host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, false, "#eeeeec", "#20242b", 0, colors);
+            var blocks = new StringBuilder ("\x1b[?25l\x1b[2J\x1b[H");
+            for (int i = 0; i < 16; i++) blocks.append ("\x1b[48;5;%dm  ".printf (i));
+            blocks.append ("\x1b[0m");
+            session.terminal.feed (blocks.str.data); settle ();
+            for (int i = 0; i < 16; i++) {
+                var before = texture (session.terminal, window);
+                colors.set_color (i, "#123456"); host.preferences.set_colors (colors); settle ();
+                assert (!same_pixels (before, texture (session.terminal, window)));
+            }
+            // Explicit truecolor and the extended indexed cube are independent
+            // of the user's 16 ANSI overrides.
+            session.terminal.feed ("\x1b[2J\x1b[H\x1b[48;2;11;22;33m      \x1b[48;5;123m      \x1b[0m".data); settle ();
+            var direct = texture (session.terminal, window);
+            host.preferences.set_colors (new Shadow.TerminalColors ()); settle ();
+            assert (same_pixels (direct, texture (session.terminal, window)));
+            session.terminal.select_all (); settle ();
+            var selected = texture (session.terminal, window);
+            colors.set_color (18, "#884422"); colors.set_color (19, "#ffeecc");
+            host.preferences.set_colors (colors); settle ();
+            assert (!same_pixels (selected, texture (session.terminal, window)));
+            session.terminal.unselect_all ();
+            host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, true, "#eeeeec", "#20242b", 0, new Shadow.TerminalColors ());
+            window.destroy ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/live-style-source-and-compact-layout", () => {
         try {
             var host = test_host ();
