@@ -375,6 +375,70 @@ int main (string[] args) {
             window.destroy ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
+    Test.add_func ("/presentation/cursor-shape-live-precedence-and-reset", () => {
+        try {
+            var host = test_host ();
+            host.preferences.set_cursor_shape ("block");
+            var request = Shadow.Request.parse ({"shadow-term", "--input", "terminal", "--", "fish"});
+            request.session = "private-cursor-test";
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            session.terminal.grab_focus ();
+            session.terminal.set_cursor_blink_mode (Vte.CursorBlinkMode.OFF);
+            session.terminal.feed ("\x1b[2J\x1b[H\x1b[?25h".data); settle ();
+            var block = texture (session.terminal, window);
+            host.preferences.set_cursor_shape ("ibeam"); settle ();
+            var ibeam = texture (session.terminal, window);
+            host.preferences.set_cursor_shape ("underline"); settle ();
+            var underline = texture (session.terminal, window);
+            assert (!same_pixels (block, ibeam) && !same_pixels (block, underline) && !same_pixels (ibeam, underline));
+
+            // A newly constructed session picks up the saved shape without
+            // requiring a subsequent preference notification.
+            request.session = "private-cursor-second";
+            var second = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (second);
+            assert (second.terminal.get_cursor_shape () == Vte.CursorShape.UNDERLINE);
+            host.preferences.set_cursor_shape ("block");
+            assert (session.terminal.get_cursor_shape () == Vte.CursorShape.BLOCK && second.terminal.get_cursor_shape () == Vte.CursorShape.BLOCK);
+            window.present_session (session); session.terminal.grab_focus (); settle ();
+
+            // The getter reports the API default, so compare pixels to verify
+            // the effective application override as well.
+            session.terminal.feed ("\x1b[6 q".data); settle ();
+            var application = texture (session.terminal, window);
+            assert (same_pixels (application, ibeam));
+            host.preferences.set_cursor_shape ("underline"); settle ();
+            assert (same_pixels (application, texture (session.terminal, window)));
+            session.terminal.feed ("\x1b[0 q".data);
+            session.terminal.set_cursor_blink_mode (Vte.CursorBlinkMode.OFF); settle ();
+            assert (same_pixels (underline, texture (session.terminal, window)));
+
+            var preferences = new Shadow.PreferencesWindow (window, host.preferences);
+            var chooser = (Gtk.DropDown) find_css (preferences.child, "pref-cursor-shape");
+            assert (chooser != null && chooser.selected == 2);
+            chooser.selected = 1; settle (); settle ();
+            assert (host.preferences.cursor_shape == "ibeam" && second.terminal.get_cursor_shape () == Vte.CursorShape.IBEAM);
+            var reset = find_button (preferences.child, "Restore Appearance Defaults");
+            assert (reset != null); reset.clicked (); settle (); settle ();
+            assert (chooser.selected == 0 && host.preferences.cursor_shape == "block");
+            assert (session.terminal.get_cursor_shape () == Vte.CursorShape.BLOCK && second.terminal.get_cursor_shape () == Vte.CursorShape.BLOCK);
+            preferences.destroy ();
+            session.dispatch_action ("composer");
+            session.input_session.report (session.input_session.token, "ready", "");
+            var editor = find_editor (find_surface (session));
+            editor.buffer.text = "preserved cursor draft"; editor.grab_focus (); settle ();
+            assert (session.terminal.has_css_class ("shadow-composer-cursor"));
+            host.preferences.set_cursor_shape ("underline"); settle ();
+            assert (session.terminal.has_css_class ("shadow-composer-cursor"));
+            session.dispatch_action ("composer"); settle ();
+            assert (!session.terminal.has_css_class ("shadow-composer-cursor"));
+            assert (session.terminal.get_cursor_shape () == Vte.CursorShape.UNDERLINE && editor.source () == "preserved cursor draft");
+            host.preferences.set_cursor_shape ("block");
+            window.destroy ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/live-terminal-palette", () => {
         try {
             var host = test_host ();
