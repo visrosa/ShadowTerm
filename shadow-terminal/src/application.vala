@@ -16,7 +16,7 @@ namespace Shadow {
         private Gtk.Revealer composer;
         private Gtk.Button restart;
         private Cancellable spawn_cancel = new Cancellable ();
-        private bool spawning = false;
+        public bool spawning { get; private set; default = false; }
         private uint kill_timeout = 0;
         private string[] environment;
         private weak Host host;
@@ -304,6 +304,8 @@ namespace Shadow {
             menu_item (box, popover, "Keyboard Shortcuts", "F1", show_shortcuts);
             box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
             menu_item (box, popover, "Hide Window", "Ctrl+Shift+H", hide_session);
+            menu_item (box, popover, "Previous Session", "Ctrl+Tab", () => window.dispatch_action ("previous-session"));
+            menu_item (box, popover, "Next Session", "Ctrl+Shift+Tab", () => window.dispatch_action ("next-session"));
             menu_item (box, popover, "Split Side by Side", "", () => window.dispatch_action ("split-horizontal"));
             menu_item (box, popover, "Split Stacked", "", () => window.dispatch_action ("split-vertical"));
             menu_item (box, popover, "Move Pane to New Tab", "", () => window.move_to_tab (this));
@@ -977,6 +979,9 @@ namespace Shadow {
     public class Host : Gtk.Application {
         private HashTable<string, TerminalSession> sessions = new HashTable<string, TerminalSession> (str_hash, str_equal);
         private ShellBridge bridge;
+        private SessionHistory session_history = new SessionHistory ();
+        private Gdk.ModifierType cycle_modifiers;
+        private uint cycle_focus_check;
         public Preferences preferences;
         private Gtk.CssProvider appearance_css = new Gtk.CssProvider ();
 
@@ -1047,6 +1052,50 @@ namespace Shadow {
             return window.input_session.pending ? "pending" : window.input_session.ready ? "ready" : "busy";
         }
 
+        public void session_focused (TerminalSession session) {
+            if (!session.closing && session.window.is_active) {
+                session_history.register (session.request.session);
+                session_history.focused (session.request.session);
+            }
+        }
+
+        public void cycle_session (TerminalSession current, int direction, Gdk.ModifierType modifiers) {
+            if (!session_history.cycling) cycle_modifiers = modifiers & ~Gdk.ModifierType.SHIFT_MASK;
+            session_history.register (current.request.session);
+            for (uint count = 0; count <= sessions.size (); count++) {
+                string? id = session_history.step (current.request.session, direction);
+                if (id == null) return;
+                var target = sessions.lookup (id);
+                if (target != null && !target.closing && (target.running || target.spawning)) {
+                    target.show_session ();
+                    if (cycle_modifiers == 0) session_history.finish ();
+                    return;
+                }
+                session_history.remove (id);
+            }
+            session_history.finish ();
+        }
+
+        public void finish_cycle () { session_history.finish (); }
+        public void cycle_focus_lost () {
+            if (!session_history.cycling || cycle_focus_check != 0) return;
+            // Window activation notifications can cross in either order. One
+            // deferred check distinguishes a workspace transfer from leaving.
+            cycle_focus_check = Timeout.add (75, () => {
+                cycle_focus_check = 0;
+                foreach (var window in get_windows ())
+                    if (window is WorkspaceWindow && window.is_active) return Source.REMOVE;
+                session_history.finish ();
+                return Source.REMOVE;
+            });
+        }
+        public void cycle_key_released (uint key, Gdk.ModifierType state) {
+            if (key == Gdk.Key.Control_L || key == Gdk.Key.Control_R) state &= ~Gdk.ModifierType.CONTROL_MASK;
+            if (key == Gdk.Key.Alt_L || key == Gdk.Key.Alt_R) state &= ~Gdk.ModifierType.ALT_MASK;
+            if (key == Gdk.Key.Super_L || key == Gdk.Key.Super_R) state &= ~Gdk.ModifierType.SUPER_MASK;
+            if ((state & cycle_modifiers) != cycle_modifiers) session_history.finish ();
+        }
+
         private void end_all () {
             foreach (var window in sessions.get_values ()) window.end_session ();
         }
@@ -1092,7 +1141,7 @@ namespace Shadow {
             var session = new TerminalSession (this, window, r, environment);
             window.add_session (session, relative, orientation);
             sessions.insert (r.session, session);
-            session.ended.connect (() => { sessions.remove (r.session); release (); });
+            session.ended.connect (() => { session_history.remove (r.session); sessions.remove (r.session); release (); });
             window.present_session (session);
             session.start ();
         }

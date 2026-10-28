@@ -131,9 +131,10 @@ namespace Shadow {
                 Idle.add (() => { if (!closing && visible) position (this, geometry.x, geometry.y, geometry.positioned); return Source.REMOVE; });
             });
             notify["is-active"].connect (() => {
+                if (!is_active) host.cycle_focus_lost ();
                 if (is_active) {
                     was_active = true;
-                    if (active_session != null) active_session.focus_input ();
+                    if (active_session != null) { active_session.focus_input (); host.session_focused (active_session); }
                 } else if (was_active && visible && active_session != null && active_session.request.hide_on_blur && blur_idle == 0) {
                     blur_idle = Idle.add (() => {
                         blur_idle = 0;
@@ -145,8 +146,14 @@ namespace Shadow {
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
                 var action = host.preferences.shortcut_action (key, state);
+                if (active_session != null && (action == "previous-session" || action == "next-session")) {
+                    host.cycle_session (active_session, action == "previous-session" ? 1 : -1, state & Gtk.accelerator_get_default_mod_mask ());
+                    return true;
+                }
+                if (key == Gdk.Key.Escape) host.finish_cycle ();
                 return action != null && dispatch_action (action);
             });
+            keys.key_released.connect ((key, code, state) => host.cycle_key_released (key, state));
             ((Gtk.Widget) this).add_controller (keys);
         }
 
@@ -199,7 +206,7 @@ namespace Shadow {
             if (active_session == session) title = session.title;
         }
 
-        public void activate_session (TerminalSession session) { select_session (session, false); }
+        public void activate_session (TerminalSession session) { select_session (session, false); host.session_focused (session); }
 
         private void select_session (TerminalSession session, bool focus = true) {
             if (session.closing) return;
@@ -373,6 +380,8 @@ namespace Shadow {
             case "close-window": close_workspace (); return true;
             case "previous-tab": cycle (-1); return true;
             case "next-tab": cycle (1); return true;
+            case "previous-session": if (current != null) host.cycle_session (current, 1, 0); return true;
+            case "next-session": if (current != null) host.cycle_session (current, -1, 0); return true;
             case "next-pane": cycle_pane (1); return true;
             case "previous-pane": cycle_pane (-1); return true;
             case "split-horizontal": host.split_session (this, Gtk.Orientation.HORIZONTAL); return true;

@@ -2,13 +2,13 @@ namespace Shadow {
     public class Preferences : Object {
         public const string[] ACTIONS = {"new-tab", "default-tab", "new-window", "close-pane", "close-tab", "close-window",
             "previous-tab", "next-tab", "split-horizontal", "split-vertical", "next-pane", "previous-pane",
-            "detach-pane", "pane-to-tab", "join-tab", "palette", "preferences", "composer", "hide", "copy", "paste", "find-terminal", "find-composer", "documentation", "recall", "paste-draft", "zoom-in", "zoom-out", "zoom-reset", "shortcuts"};
+            "detach-pane", "pane-to-tab", "join-tab", "palette", "preferences", "composer", "hide", "copy", "paste", "find-terminal", "find-composer", "documentation", "recall", "paste-draft", "zoom-in", "zoom-out", "zoom-reset", "shortcuts", "previous-session", "next-session"};
         public const string[] ACTION_LABELS = {"New Tab", "New Tab in Default Directory", "New Window", "Close Pane", "Close Tab", "Close Window",
             "Previous Tab", "Next Tab", "Split Side by Side", "Split Stacked", "Next Pane", "Previous Pane",
-            "Move Pane to New Window", "Move Pane to New Tab", "Move Previous Tab into Split", "Command Palette…", "Preferences…", "Toggle Composer", "Hide Window", "Copy", "Paste", "Find in Terminal", "Find in Composer", "Documentation", "Recall Last Input", "Paste Draft without Return", "Zoom In", "Zoom Out", "Reset Zoom", "Keyboard Shortcuts"};
+            "Move Pane to New Window", "Move Pane to New Tab", "Move Previous Tab into Split", "Command Palette…", "Preferences…", "Toggle Composer", "Hide Window", "Copy", "Paste", "Find in Terminal", "Find in Composer", "Documentation", "Recall Last Input", "Paste Draft without Return", "Zoom In", "Zoom Out", "Reset Zoom", "Keyboard Shortcuts", "Previous Session", "Next Session"};
         public const string[] DEFAULT_KEYS = {"<Control>t", "<Control>n", "<Control><Shift>n", "<Control>w", "<Control><Shift>w", "<Control><Shift>q",
             "<Control>Page_Up", "<Control>Page_Down", "<Control><Shift>e", "<Control><Shift>o", "<Control><Alt>Right", "<Control><Alt>Left",
-            "", "", "", "<Control><Shift>p", "<Control>comma", "<Control><Shift>m", "<Control><Shift>h", "<Control><Shift>c", "<Control><Shift>v", "<Control><Shift>f", "<Control>f", "<Alt>h", "<Control><Shift>l", "<Control><Shift>Return", "<Control><Shift>plus", "<Control><Shift>minus", "<Control><Shift>0", "F1"};
+            "", "", "", "<Control><Shift>p", "<Control>comma", "<Control><Shift>m", "<Control><Shift>h", "<Control><Shift>c", "<Control><Shift>v", "<Control><Shift>f", "<Control>f", "<Alt>h", "<Control><Shift>l", "<Control><Shift>Return", "<Control><Shift>plus", "<Control><Shift>minus", "<Control><Shift>0", "F1", "<Control>Tab", "<Control><Shift>Tab"};
         private HashTable<string, string> shortcuts = new HashTable<string, string> (str_hash, str_equal);
 
         public string shortcut (string action) {
@@ -27,6 +27,7 @@ namespace Shadow {
 
         public string? shortcut_action (uint key, Gdk.ModifierType modifiers) {
             modifiers &= Gtk.accelerator_get_default_mod_mask ();
+            if (key == Gdk.Key.ISO_Left_Tab) { key = Gdk.Key.Tab; modifiers |= Gdk.ModifierType.SHIFT_MASK; }
             key = Gdk.keyval_to_lower (key);
             foreach (var action in ACTIONS) {
                 uint expected = 0; Gdk.ModifierType mods = 0;
@@ -47,15 +48,16 @@ namespace Shadow {
         public static string canonical_shortcut (string value) throws Error {
             if (value.strip () == "") return "";
             uint key = 0; Gdk.ModifierType mods = 0;
-            if (value.length > 128 || !Gtk.accelerator_parse (value, out key, out mods) || !Gtk.accelerator_valid (key, mods))
+            if (value.length > 128 || !Gtk.accelerator_parse (value, out key, out mods) || (!Gtk.accelerator_valid (key, mods) && key != Gdk.Key.Tab && key != Gdk.Key.ISO_Left_Tab))
                 throw new IOError.INVALID_ARGUMENT ("Use a valid shortcut, such as <Control><Shift>e");
             mods &= Gtk.accelerator_get_default_mod_mask ();
+            if (key == Gdk.Key.ISO_Left_Tab) { key = Gdk.Key.Tab; mods |= Gdk.ModifierType.SHIFT_MASK; }
             key = Gdk.keyval_to_lower (key);
             // Bare text/caret keys remain editor/program input. Enter and Tab
             // also carry submission/completion semantics in Composer.
             if ((mods & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SUPER_MASK)) == 0 && !(key >= Gdk.Key.F1 && key <= Gdk.Key.F35))
                 throw new IOError.INVALID_ARGUMENT ("Use Ctrl, Alt or Super with text/navigation keys");
-            if (key == Gdk.Key.Return || key == Gdk.Key.Tab || key == Gdk.Key.Escape || key == Gdk.Key.space ||
+            if (key == Gdk.Key.Return || key == Gdk.Key.Escape || key == Gdk.Key.space ||
                 (key == Gdk.Key.Right && mods == Gdk.ModifierType.CONTROL_MASK) ||
                 (mods == Gdk.ModifierType.CONTROL_MASK && ("acdxvzbif".index_of_char (key) >= 0)))
                 throw new IOError.INVALID_ARGUMENT ("This shortcut is reserved for editing or completion");

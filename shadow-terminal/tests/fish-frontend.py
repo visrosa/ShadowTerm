@@ -429,6 +429,16 @@ def worker(tmp):
         harness.wait_for(lambda: read("split-root-draft") == "root", "original split draft retained")
         harness.wait_for(lambda: "ready" in state(), "root ready after split command")
         xdo("key", "ctrl+alt+Right")
+        # MRU spans split panes and holds one order until Ctrl is released.
+        xdo("keydown", "ctrl"); xdo("key", "Tab")
+        harness.wait_for(visible, "MRU previous split")
+        xdo("key", "Tab")
+        harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", " · " + pane + "$", check=False), "MRU split wrap")
+        xdo("key", "shift+Tab")
+        harness.wait_for(visible, "MRU reverse split")
+        xdo("keyup", "ctrl")
+        xdo("key", "ctrl+Tab")
+        harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", " · " + pane + "$", check=False), "MRU quick previous toggle")
         def palette_action(label):
             xdo("key", "ctrl+shift+p")
             popup = harness.wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^Command Palette$", check=False), "layout action palette")

@@ -45,7 +45,7 @@ gnome = import('gnome')
 resources = gnome.compile_resources('shadow-resources', 'data/resources.xml', source_dir: 'data', c_name: 'shadow')
 executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'),
            install: true, install_dir: helper_dir)
-app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/palette.vala',
+app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/session-history.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'src/context.vala',
                     'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
@@ -87,3 +87,6 @@ executable('appearance-test', native, 'src/gtk-native.vapi', 'src/preferences.va
 
 python = find_program('python3')
 test('content-services', python, args: [meson.current_source_dir() / 'tests/content-test.py'], timeout: 15)
+
+session_history_test = executable('session-history-test', 'src/session-history.vala', 'tests/session-history-test.vala', dependencies: dependency('gobject-2.0'))
+test('session-history', session_history_test)

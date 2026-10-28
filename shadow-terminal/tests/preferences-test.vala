@@ -151,5 +151,19 @@ int main (string[] args) {
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);
     });
+    Test.add_func ("/preferences/session-shortcut-normalization", () => {
+        try {
+            assert (Shadow.Preferences.canonical_shortcut ("<Control>Tab") == "<Control>Tab");
+            assert (Shadow.Preferences.canonical_shortcut ("<Control>ISO_Left_Tab") == Shadow.Preferences.canonical_shortcut ("<Control><Shift>Tab"));
+            foreach (var reserved in new string[] {"Tab", "<Shift>Tab"}) {
+                bool rejected = false;
+                try { Shadow.Preferences.canonical_shortcut (reserved); } catch (Error error) { rejected = true; }
+                assert (rejected);
+            }
+            var settings = new Shadow.Preferences ("/nonexistent/shadow-shortcuts-test");
+            assert (settings.shortcut_action (Gdk.Key.Tab, Gdk.ModifierType.CONTROL_MASK) == "previous-session");
+            assert (settings.shortcut_action (Gdk.Key.ISO_Left_Tab, Gdk.ModifierType.CONTROL_MASK) == "next-session");
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     return Test.run ();
 }
