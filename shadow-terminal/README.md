@@ -12,7 +12,9 @@ nice -n 15 meson compile -C build -j 1
 ./build/shadow-term
 ```
 
-If the compiler is named `valac`, omit `VALAC=valac-0.56`. The build installs nothing. The terminal launches `$SHELL`, falling back to `/bin/sh`, in the invoking directory. Shell startup configuration works normally. Keep the source tree and build directory in place: the executable uses their fish adapter and helper paths. `--help` and `--version` work without a display.
+If the compiler is named `valac`, omit `VALAC=valac-0.56`. Compilation installs nothing. The terminal launches `$SHELL`, falling back to `/bin/sh`, in the invoking directory. Shell startup configuration works normally. Development builds use helper and fish adapter paths in the source/build tree, which must remain in place. `--help` and `--version` work without a display.
+
+For packaging, configure a separate build with `-Dinstalled-layout=true --prefix=/usr`. `meson install` then installs `shadow-term`, the shell/content helpers under `libexec/shadowterm`, the fish adapter under `share/shadowterm`, and the desktop entry/icon. Runtime paths refer to the final prefix, independently of `DESTDIR`; development builds remain usable directly from their build directory. A supplied `vte-library-dir` is retained as the installed executable's runpath without exporting `LD_LIBRARY_PATH` to child programs. The Gentoo live packages in [the personal overlay](../../dotfiles/overlay/app-shells/shadowterm/README.md) track this repository's `main` and provide a separate private patched VTE.
 
 ```fish
 # A separate shell session, with a preferred initial size in logical pixels.

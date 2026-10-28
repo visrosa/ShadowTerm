@@ -25,17 +25,36 @@ config.set_quoted('CONTENT_SERVICE_PATH', meson.current_source_dir() / 'content-
 config.set_quoted('SHELL_HELPER_PATH', meson.current_build_dir() / 'vcom-shell')
 config.set_quoted('FISH_INTEGRATION_PATH', meson.current_source_dir() / 'integration/fish.fish')
 config.set('PRIVATE_VTE', private_vte != '' ? 'true' : 'false')
-paths = configure_file(input: 'src/config.vala.in', output: 'config.vala', configuration: config)
+test_paths = configure_file(input: 'src/config.vala.in', output: 'test-config.vala', configuration: config)
+runtime_config = configuration_data()
+runtime_config.merge_from(config)
+helper_dir = get_option('prefix') / get_option('libexecdir') / 'shadowterm'
+data_dir = get_option('prefix') / get_option('datadir') / 'shadowterm'
+if get_option('installed-layout')
+  runtime_config.set_quoted('CONTENT_SERVICE_PATH', helper_dir / 'content-service.py')
+  runtime_config.set_quoted('SHELL_HELPER_PATH', helper_dir / 'vcom-shell')
+  runtime_config.set_quoted('FISH_INTEGRATION_PATH', data_dir / 'fish.fish')
+endif
+paths = configure_file(input: 'src/config.vala.in', output: 'config.vala', configuration: runtime_config)
 gnome = import('gnome')
 resources = gnome.compile_resources('shadow-resources', 'data/resources.xml', source_dir: 'data', c_name: 'shadow')
-executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'), install: false)
+executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'),
+           install: true, install_dir: helper_dir)
 app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/terminal-colors.vala', 'src/context.vala',
                     'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
 app_sources += [paths, editor, completion, assistance, resources]
 executable('shadow-term', app_sources, dependencies: deps, vala_args: ['--pkg=posix'],
-           c_args: cflags, include_directories: app_includes, build_rpath: private_vte, install: false)
+           c_args: cflags, include_directories: app_includes, build_rpath: private_vte,
+           install: true, install_rpath: private_vte)
+install_data('content-service.py', install_dir: helper_dir, install_mode: 'rwxr-xr-x')
+install_data('completion-definitions.py', install_dir: helper_dir)
+install_data('integration/fish.fish', install_dir: data_dir)
+install_data('data/io.github.visrosa.Vibrant.ShadowTerm.desktop',
+             install_dir: get_option('datadir') / 'applications')
+install_data('data/icons/scalable/apps/io.github.visrosa.Vibrant.ShadowTerm.svg',
+             install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps')
 executable('presentation-test', app_sources, 'tests/presentation-test.vala', dependencies: deps,
            vala_args: ['--pkg=posix', '--define=PRESENTATION_TEST'], c_args: cflags,
            include_directories: app_includes, build_rpath: private_vte, install: false)
@@ -53,7 +72,7 @@ preferences_test = executable('preferences-test', 'src/preferences.vala', 'src/t
 test('preferences', preferences_test)
 context_test = executable('context-test', 'src/context.vala', 'src/prompt-context.vala', 'tests/context-test.vala', dependencies: dependency('gio-2.0'))
 test('repository-context', context_test)
-fish_services_test = executable('fish-services-test', 'src/fish-services.vala', 'src/content-client.vala', paths, completion, 'tests/fish-services-test.vala',
+fish_services_test = executable('fish-services-test', 'src/fish-services.vala', 'src/content-client.vala', test_paths, completion, 'tests/fish-services-test.vala',
                                dependencies: [dependency('gio-2.0'), dependency('json-glib-1.0')], vala_args: ['--pkg=posix'])
 test('fish-services', fish_services_test)
 editor_checks = configure_file(input: '../rich-input/tests/editor-test.vala',

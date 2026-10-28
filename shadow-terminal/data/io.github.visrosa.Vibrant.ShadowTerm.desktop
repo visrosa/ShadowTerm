@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Shadow Term
+Comment=Terminal sessions with V Composer
+Exec=shadow-term --input composer
+Icon=io.github.visrosa.Vibrant.ShadowTerm
+StartupWMClass=io.github.visrosa.Vibrant.ShadowTerm
+Terminal=false
+StartupNotify=true
+Categories=System;TerminalEmulator;

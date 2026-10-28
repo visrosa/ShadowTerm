@@ -8,3 +8,5 @@ Shadow Term combines a GTK4/Vala terminal host with V Composer, a rich source ed
 Keep both directories together: Shadow Term builds the shared editor sources from `rich-input/`. Its normal terminal session needs no ClaudeVassal dependency; the optional CV demonstration has its own adapter requirements.
 
 The source history for these components is retained from [Vibrant](https://github.com/visrosa/Vibrant). The earlier shell output-formatting plugin remains in that repository.
+
+Shadow Term and V Composer are licensed under the GNU General Public License, version 3 or later. See [COPYING](COPYING).
