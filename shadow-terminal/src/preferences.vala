@@ -371,12 +371,21 @@ namespace Shadow {
             var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 8); box.append (heading); box.append (list); page.append (box);
             return list;
         }
+        private Gtk.Label description (string text) {
+            var label = new Gtk.Label (text) {xalign = 0, wrap = true};
+            label.add_css_class ("dim-label");
+            // Relative scaling preserves the desktop font and accessibility sizing.
+            var attributes = new Pango.AttrList ();
+            attributes.insert (Pango.attr_scale_new (Pango.Scale.SMALL));
+            label.attributes = attributes;
+            return label;
+        }
         private void row (Gtk.ListBox list, string title, string detail, Gtk.Widget control, string? name = null) {
             var box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 18) {margin_start = 14, margin_end = 14, margin_top = 12, margin_bottom = 12};
             var labels = new Gtk.Box (Gtk.Orientation.VERTICAL, 4) {hexpand = true, valign = Gtk.Align.CENTER};
             labels.append (new Gtk.Label (title) {xalign = 0, wrap = true});
             if (detail != "") {
-                var hint = new Gtk.Label (detail) {xalign = 0, wrap = true, max_width_chars = 38}; hint.add_css_class ("dim-label"); labels.append (hint);
+                var hint = description (detail); hint.max_width_chars = 38; labels.append (hint);
             }
             control.valign = Gtk.Align.CENTER;
             if (name != null) control.add_css_class (name);
@@ -423,8 +432,7 @@ namespace Shadow {
                 row (fonts, names[i] + " face", "Automatic when unchecked; uses the regular cell size.", controls);
             }
             if (!style_fonts_available) {
-                var hint = new Gtk.Label ("Separate Pane faces require the private VTE style-font hook. Saved choices are retained with system VTE.") {wrap = true, xalign = 0};
-                hint.add_css_class ("dim-label"); appearance.append (hint);
+                appearance.append (description ("Separate Pane faces require the private VTE style-font hook. Saved choices are retained with system VTE."));
             }
             var colors = group (appearance, "Colors and transparency");
             system_colors = new Gtk.Switch () {active = settings.system_colors};
@@ -490,7 +498,7 @@ namespace Shadow {
             var shortcuts = page ();
             var search = new Gtk.SearchEntry () {placeholder_text = "Find a shortcut…"}; shortcuts.append (search);
             var bindings = group (shortcuts, "Keyboard shortcuts");
-            var tip = new Gtk.Label ("Select a shortcut, then press the new combination. Escape cancels; Backspace disables it. Text editing and completion keys stay reserved.") {wrap = true, xalign = 0}; tip.add_css_class ("dim-label"); shortcuts.append (tip);
+            shortcuts.append (description ("Select a shortcut, then press the new combination. Escape cancels; Backspace disables it. Text editing and completion keys stay reserved."));
             for (int i = 0; i < Preferences.ACTIONS.length; i++) {
                 string action = Preferences.ACTIONS[i];
                 var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
