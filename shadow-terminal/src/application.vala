@@ -1025,9 +1025,9 @@ namespace Shadow {
                 headerbar.shadow-header windowcontrols button { color: %s; }
                 .split-layout > paned separator { background-color: alpha(currentColor, 0.12); }
                 .split-layout .active-pane { outline: 1px solid alpha(@theme_selected_bg_color, 0.55); outline-offset: -1px; }
-                .workspace-tab { border-radius: 8px; }
-                .workspace-tab.selected { background-color: alpha(currentColor, 0.12); }
-                .workspace-tab > button { color: inherit; }
+                .workspace-tab { border-radius: 0; background: transparent; }
+                .workspace-tab.selected { background: transparent; }
+                .workspace-tab > button { color: inherit; padding: 4px 8px; min-width: 0; }
                 .workspace-tab > button:checked { background: transparent; box-shadow: none; }
                 .shadow-composer { background-color: @theme_bg_color; color: @theme_fg_color;
                     border-top: 1px solid alpha(@theme_fg_color, 0.12); }

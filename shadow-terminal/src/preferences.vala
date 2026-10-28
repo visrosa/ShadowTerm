@@ -446,7 +446,7 @@ namespace Shadow {
             row (colors, "Use system colors", "Follow the desktop light or dark appearance.", system_colors, "pref-system-colors");
             row (colors, "Pane text", "", foreground, "pref-foreground"); row (colors, "Pane background", "", background, "pref-background");
             row (colors, "Background opacity", "Transparency depends on the compositor.", pane_opacity, "pref-opacity");
-            row (colors, "Inherit Pane Style", "Unify Composer and header colors and opacity.", inherit_style, "pref-inherit");
+            row (colors, "Inherit Pane Style", "Unify Composer, header and documentation colors and opacity.", inherit_style, "pref-inherit");
             row (colors, "Header opacity boost", "0% matches the Pane; 100% makes the header opaque.", header_boost, "pref-header-boost");
             var theme_group = group (appearance, "Terminal color scheme");
             var import_button = new Gtk.Button.with_label ("Import…");

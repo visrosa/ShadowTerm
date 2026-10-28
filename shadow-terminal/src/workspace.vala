@@ -65,7 +65,7 @@ namespace Shadow {
         private weak Host host;
         private Gtk.Stack pages = new Gtk.Stack ();
         private Gtk.Stack menus = new Gtk.Stack ();
-        private Gtk.Box tabs = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 4);
+        private Gtk.Box tabs = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {homogeneous = true};
         private Gtk.ScrolledWindow tab_scroll;
         private List<TerminalSession> sessions = new List<TerminalSession> ();
         private HashTable<SessionTab, Gtk.Box> tab_widgets = new HashTable<SessionTab, Gtk.Box> (direct_hash, direct_equal);
@@ -111,12 +111,13 @@ namespace Shadow {
                 if (preferences_handler != 0) { host.preferences.disconnect (preferences_handler); preferences_handler = 0; }
             });
             create.clicked.connect (() => host.new_tab (this, active_session == null ? request.cwd : active_session.directory));
-            header.pack_start (create);
             tabs.hexpand = true;
             tab_scroll = new Gtk.ScrolledWindow () {child = tabs, hexpand = true,
                 hscrollbar_policy = Gtk.PolicyType.EXTERNAL, vscrollbar_policy = Gtk.PolicyType.NEVER,
-                propagate_natural_width = true};
-            header.title_widget = tab_scroll;
+                propagate_natural_width = false};
+            var strip = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {hexpand = true};
+            strip.append (create); strip.append (tab_scroll);
+            header.title_widget = strip;
             header.pack_end (menus);
             titlebar = header;
             pages.vexpand = true;
@@ -167,19 +168,9 @@ namespace Shadow {
                 tab = new SessionTab (session);
                 layouts.append (tab);
                 pages.add_named (tab, session.request.session);
-                var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {hexpand = true};
-                row.add_css_class ("workspace-tab");
-                var select = new Gtk.ToggleButton () {has_frame = false, hexpand = true};
-                select.child = new Gtk.Label (session.request.session) {ellipsize = Pango.EllipsizeMode.MIDDLE,
-                    max_width_chars = 26, width_chars = 8};
-                select.clicked.connect (() => { if (tab.active != null) select_session (tab.active); });
-                var close = new Gtk.Button.from_icon_name ("window-close-symbolic") {has_frame = false, tooltip_text = "Close Tab"};
-                close.clicked.connect (() => close_tab (tab));
-                row.append (select); row.append (close);
-                var middle = new Gtk.GestureClick () {button = 2, propagation_phase = Gtk.PropagationPhase.CAPTURE};
-                weak Gtk.GestureClick middle_click = middle;
-                middle.pressed.connect (() => { middle_click.set_state (Gtk.EventSequenceState.CLAIMED); close_tab (tab); });
-                row.add_controller (middle);
+                var row = new PaneTab (session.request.session, "Close Tab");
+                row.activated.connect (() => { if (tab.active != null) select_session (tab.active); });
+                row.closed.connect (() => close_tab (tab));
                 tabs.append (row); tab_widgets.insert (tab, row);
             }
             session_tabs.insert (session, tab);
@@ -217,8 +208,7 @@ namespace Shadow {
             menus.visible_child = session.menu;
             foreach (var item in layouts) {
                 var row = tab_widgets.lookup (item);
-                ((Gtk.ToggleButton) row.get_first_child ()).active = item == tab;
-                if (item == tab) row.add_css_class ("selected"); else row.remove_css_class ("selected");
+                ((PaneTab) row).selected = item == tab;
             }
             foreach (var item in sessions) {
                 if (item == session) item.add_css_class ("active-pane"); else item.remove_css_class ("active-pane");

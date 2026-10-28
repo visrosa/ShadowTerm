@@ -310,6 +310,21 @@ int main (string[] args) {
             assert (stack is Gtk.Stack);
             var view = find_editor (stack);
             assert (view.source () == "task-list" && !view.editable);
+            var source_tab = (Shadow.PaneTab) find_css (docs.child, "workspace-tab");
+            assert (source_tab.get_first_child () == source_tab.get_last_child ());
+            assert (source_tab.selected);
+            host.preferences.apply ("Monospace 12", "Monospace 14", 0.5, 10000, true, false, "#ddeeff", "#123456");
+            settle ();
+            Gdk.RGBA expected = {}; expected.parse ("#ddeeff");
+            assert (view.get_color ().equal (expected));
+            var image = texture (docs, docs);
+            var pixels = new uint8[image.get_width () * image.get_height () * 4];
+            image.download (pixels, image.get_width () * 4);
+            assert (pixels[3] == 0);
+            image.save_to_png ("/tmp/shadow-term-documentation.png");
+            host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, false, true);
+            settle (); assert (view.source () == "task-list");
+
             stack.visible_child_name = "1";
             for (int i = 0; i < 3; i++) settle ();
             stack.visible_child_name = "2";
