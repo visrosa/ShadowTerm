@@ -128,5 +128,28 @@ int main (string[] args) {
         assert (colors.get_color (1) == "rgb(18,52,86)");
         assert (colors.special (16) == null);
     });
+    Test.add_func ("/preferences/cursor-shape-persistence-and-validation", () => {
+        string? directory = null;
+        try {
+            directory = DirUtils.make_tmp ("shadow-cursor-XXXXXX");
+            string filename = Path.build_filename (directory, "preferences.ini");
+            var settings = new Shadow.Preferences (filename);
+            assert (settings.cursor_shape == "block");
+            foreach (var shape in Shadow.Preferences.CURSOR_SHAPES) {
+                settings.set_cursor_shape (shape);
+                var loaded = new Shadow.Preferences (filename);
+                assert (loaded.cursor_shape == shape);
+                loaded.apply ("Monospace 14", "Sans 13", 0.7, 10000);
+                assert (new Shadow.Preferences (filename).cursor_shape == shape);
+            }
+            settings.set_cursor_shape ("unknown");
+            assert (settings.cursor_shape == "block");
+            FileUtils.set_contents (filename, "[appearance]\ncursor-shape=invalid\nopacity=0.5\n");
+            var invalid = new Shadow.Preferences (filename);
+            assert (invalid.cursor_shape == "block" && invalid.opacity == 0.5);
+            FileUtils.unlink (filename);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+        if (directory != null) DirUtils.remove (directory);
+    });
     return Test.run ();
 }

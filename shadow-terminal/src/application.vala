@@ -761,6 +761,13 @@ namespace Shadow {
                 applied_font_signature = signature;
             }
             terminal.set_scrollback_lines ((long) host.preferences.scrollback);
+            // The API default remains separate from the application's DECSCUSR
+            // override; changing preferences must not reset program state.
+            switch (host.preferences.cursor_shape) {
+                case "ibeam": terminal.set_cursor_shape (Vte.CursorShape.IBEAM); break;
+                case "underline": terminal.set_cursor_shape (Vte.CursorShape.UNDERLINE); break;
+                default: terminal.set_cursor_shape (Vte.CursorShape.BLOCK); break;
+            }
             editor.set_editor_font (host.preferences.editor_font);
             preview.set_editor_font (host.preferences.editor_font);
             context_bar.apply_preferences ();

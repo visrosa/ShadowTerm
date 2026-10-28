@@ -99,6 +99,8 @@ namespace Shadow {
         public string italic_font = "";
         public string bold_italic_font = "";
         public string editor_font = "Monospace 12";
+        public const string[] CURSOR_SHAPES = {"block", "ibeam", "underline"};
+        public string cursor_shape = "block";
         public double opacity = 1;
         public int64 scrollback = 10000;
         public bool inherit_style = true;
@@ -121,6 +123,7 @@ namespace Shadow {
             var file = new KeyFile ();
             try { file.load_from_file (this.filename, KeyFileFlags.NONE); } catch (Error error) { return; }
             colors.load (file);
+            try { cursor_shape = valid_cursor_shape (file.get_string ("appearance", "cursor-shape")); } catch (Error error) {}
             try { terminal_font = valid_font (file.get_string ("appearance", "terminal-font"), terminal_font); } catch (Error error) {}
             try { bold_font = optional_font (file.get_string ("appearance", "bold-font")); } catch (Error error) {}
             try { italic_font = optional_font (file.get_string ("appearance", "italic-font")); } catch (Error error) {}
@@ -241,6 +244,15 @@ namespace Shadow {
             docs_dismiss = enabled; changed (); save ();
         }
 
+        private static string valid_cursor_shape (string value) {
+            return value in CURSOR_SHAPES ? value : "block";
+        }
+
+        public void set_cursor_shape (string value) throws Error {
+            cursor_shape = valid_cursor_shape (value);
+            changed (); save ();
+        }
+
         public void set_input_guard (bool enabled) throws Error {
             guard_pane_input = enabled;
             changed ();
@@ -268,6 +280,7 @@ namespace Shadow {
             file.set_string ("appearance", "italic-font", italic_font);
             file.set_string ("appearance", "bold-italic-font", bold_italic_font);
             file.set_string ("appearance", "editor-font", editor_font);
+            file.set_string ("appearance", "cursor-shape", cursor_shape);
             file.set_double ("appearance", "opacity", this.opacity);
             file.set_int64 ("terminal", "scrollback", this.scrollback);
             file.set_boolean ("terminal", "guard-pane-input", guard_pane_input);
@@ -332,6 +345,7 @@ namespace Shadow {
         private Gtk.CheckButton[] custom_faces = {};
         private Gtk.Scale opacity;
         private Gtk.SpinButton lines;
+        private Gtk.DropDown cursor_shape;
         private Gtk.Switch inherit_style;
         private Gtk.Switch system_colors;
         private Gtk.ColorDialogButton foreground;
@@ -391,6 +405,11 @@ namespace Shadow {
             editor = new Gtk.FontDialogButton (new Gtk.FontDialog () {title = "Composer Font"}) {font_desc = Pango.FontDescription.from_string (settings.editor_font)};
             row (fonts, "Pane font", "The regular face determines terminal cell size.", terminal, "pref-terminal-font");
             row (fonts, "Composer font", "Independent text size and family.", editor, "pref-editor-font");
+            cursor_shape = new Gtk.DropDown.from_strings ({"Block", "I-beam", "Underline"});
+            for (int i = 0; i < Preferences.CURSOR_SHAPES.length; i++)
+                if (Preferences.CURSOR_SHAPES[i] == settings.cursor_shape) cursor_shape.selected = i;
+            row (fonts, "Pane cursor shape", "Applications can request their own cursor shape.", cursor_shape, "pref-cursor-shape");
+            cursor_shape.notify["selected"].connect (schedule_apply);
             string[] names = {"Bold", "Italic", "Bold italic"};
             string[] values = {settings.bold_font, settings.italic_font, settings.bold_italic_font};
             for (int i = 0; i < names.length; i++) {
@@ -511,6 +530,7 @@ namespace Shadow {
                 terminal.font_desc = Pango.FontDescription.from_string ("Monospace 12"); editor.font_desc = Pango.FontDescription.from_string ("Monospace 12");
                 foreach (var custom in custom_faces) custom.active = false;
                 opacity.set_value (100); lines.value = 10000; inherit_style.active = system_colors.active = true;
+                cursor_shape.selected = 0;
                 Gdk.RGBA reset_fg = {}, reset_bg = {}; reset_fg.parse ("#eeeeec"); reset_bg.parse ("#20242b"); foreground.rgba = reset_fg; background.rgba = reset_bg; header_boost.set_value (0);
                 load_color_controls (new TerminalColors ());
                 update_color_sensitivity ();
@@ -609,6 +629,7 @@ namespace Shadow {
                     (int64) lines.value, inherit_style.active, system_colors.active, foreground.get_rgba ().to_string (), background.get_rgba ().to_string (), header_boost.get_value () / 100, colors);
                 settings.set_style_fonts (custom_faces[0].active ? faces[0].font_desc.to_string () : "",
                     custom_faces[1].active ? faces[1].font_desc.to_string () : "", custom_faces[2].active ? faces[2].font_desc.to_string () : "");
+                settings.set_cursor_shape (Preferences.CURSOR_SHAPES[cursor_shape.selected]);
                 status.label = "";
             } catch (Error error) { status.label = "Applied; could not save: " + error.message; }
         }
