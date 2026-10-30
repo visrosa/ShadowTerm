@@ -3,6 +3,37 @@
 status is-interactive; or return
 set -q SHADOW_TERM_HELPER SHADOW_TERM_SESSION SHADOW_TERM_TOKEN; or return
 
+# Fish's ordinary multiline paste walks every line in shell code and grows an
+# accumulated list. Dense large pastes can spend seconds there before the
+# reader can accept another key. Keep the ordinary handler for small edits;
+# bulk source keeps its indentation and enters the native buffer in one call.
+functions __fish_paste >/dev/null
+if functions --query __fish_paste
+    functions --copy __fish_paste __vcom_saved_paste
+    function __fish_paste
+        if test (string length -- "$argv[1]") -lt 32768
+            or commandline --search-field >/dev/null
+            __vcom_saved_paste $argv
+            return
+        end
+        set --local lines (string split \r -- "$argv[1]" | string split \n)
+        set lines (string replace --all --regex '[[:cntrl:]]' '' -- $lines)
+        set --local quote_state (__fish_tokenizer_state -- (commandline --current-token --cut-at-cursor | string collect))
+        if contains -- $quote_state single single-escaped
+            # Retain fish's literal insertion inside an open single quote.
+            if status test-feature regex-easyesc
+                set lines (string replace -ra "(['\\\])" '\\\\$1' -- $lines)
+            else
+                set lines (string replace -ra "(['\\\])" '\\\\\\\$1' -- $lines)
+            end
+        end
+        if not string length --quiet -- (commandline --cut-at-cursor)
+            set lines[1] (string trim --left -- "$lines[1]")
+        end
+        commandline --insert -- $lines
+    end
+end
+
 # Keep prompt drawing local to this shell. The original functions are retained
 # for native editing; no escape-code erasure or command-output filtering occurs.
 set --global __vcom_prompt_hidden 1

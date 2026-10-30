@@ -268,6 +268,7 @@ def main():
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--frontend", action="store_true", help="test Composer's interactive fish adapter")
     parser.add_argument("--presentation", action="store_true", help="only check layout and live rendering on a private display")
+    parser.add_argument("--paste", action="store_true", help="test large native fish pastes")
     args = parser.parse_args()
     if args.worker:
         if os.environ.get("SHADOW_TERM_PRIVATE_TEST") != "1":
@@ -276,6 +277,9 @@ def main():
             subprocess.run([str(ROOT / "build/editor-test")], check=True, timeout=8)
             subprocess.run([str(ROOT / "build/appearance-test")], check=True, timeout=5)
             subprocess.run([str(ROOT / "build/presentation-test")], check=True, timeout=25)
+        elif args.paste:
+            import runpy
+            runpy.run_path(str(Path(__file__).with_name("native-paste.py")))["worker"](args.worker)
         elif args.frontend:
             import runpy
             runpy.run_path(str(Path(__file__).with_name("fish-frontend.py")))["worker"](args.worker)
@@ -323,6 +327,8 @@ def main():
                                 "SHELL": "/usr/bin/fish"}
             arguments = ["dbus-run-session", "--config-file=" + str(config), "--", sys.executable,
                          str(Path(__file__).resolve()), "--worker", str(tmp)]
+            if args.paste:
+                arguments.append("--paste")
             if args.frontend:
                 arguments.append("--frontend")
             if args.presentation:
@@ -330,7 +336,7 @@ def main():
             result = subprocess.run(arguments, env=env,
                                     capture_output=True, text=True, timeout=90)
             if result.returncode:
-                app_log = "\n".join(p.read_text(errors="replace") for p in (tmp / "app.log", tmp / "frontend.log") if p.exists())
+                app_log = "\n".join(p.read_text(errors="replace") for p in (tmp / "app.log", tmp / "frontend.log", tmp / "paste.log") if p.exists())
                 raise AssertionError(result.stdout + result.stderr + "\n" + app_log)
             if not args.presentation:
                 # Interactive fish persists history in its data directory,
