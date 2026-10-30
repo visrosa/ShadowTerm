@@ -112,3 +112,43 @@
  		_vte_debug_print(vte::debug::category::DRAW,
                                   "Rejecting italic bold font (ratio {}%)",
                                   ratio);
+--- a/src/drawing-gsk.cc
++++ b/src/drawing-gsk.cc
+@@ -209,6 +209,37 @@
+                         auto const from_string = ufi->using_pango_glyph_string.glyph_string;
+                         if (from_string->num_glyphs == 0)
+                                 break;
++
++                        // Private-use icon fonts can supply a two-cell drawing for
++                        // a one-cell character. Fit only those drawings; terminal
++                        // widths, cursor movement and ordinary text stay unchanged.
++                        auto const base = _vte_unistr_get_base(c);
++                        auto const private_use = (base >= 0xe000 && base <= 0xf8ff) ||
++                                (base >= 0xf0000 && base <= 0xffffd) ||
++                                (base >= 0x100000 && base <= 0x10fffd);
++                        if (private_use) {
++                                PangoRectangle ink;
++                                pango_glyph_string_extents(from_string, node_font, &ink, nullptr);
++                                auto const left = std::min(0.0, ink.x / double(PANGO_SCALE));
++                                auto const right = std::max(double(uinfo->width),
++                                        (ink.x + ink.width) / double(PANGO_SCALE));
++                                auto const available = requests[i].columns * cell_width();
++                                if (right - left > available) {
++                                        flush_glyph_string(node_font, &rgba);
++                                        auto const offset = GRAPHENE_POINT_INIT(float(-left), 0);
++                                        auto node = gsk_text_node_new(node_font, from_string, &rgba, &offset);
++                                        if (node != nullptr) {
++                                                auto const origin = GRAPHENE_POINT_INIT(float(requests[i].x), float(y));
++                                                gtk_snapshot_save(m_snapshot);
++                                                gtk_snapshot_translate(m_snapshot, &origin);
++                                                gtk_snapshot_scale(m_snapshot, available / (right - left), 1);
++                                                gtk_snapshot_append_node(m_snapshot, node);
++                                                gtk_snapshot_restore(m_snapshot);
++                                                gsk_render_node_unref(node);
++                                        }
++                                        continue;
++                                }
++                        }
+ 
+                         auto to_glyphs = vte_glyphs_grow (&m_glyphs, from_string->num_glyphs);
+                         for (int j = 0; j < from_string->num_glyphs; j++) {

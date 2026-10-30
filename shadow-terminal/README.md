@@ -172,6 +172,8 @@ Export reviewable fish definitions with `python3 completion-definitions.py --exp
 
 [VTE 0.82.4](https://github.com/GNOME/vte/tree/0.82.4) hardcodes idle OSC 8 link decoration and exposes neither host cursor visibility nor alternate-screen state through its public GTK API. The [small presentation patch](patches/vte-0.82.4-hover-only-hyperlinks.patch) adds opt-in widget classes for hover-only links and Composer-time cursor hiding, plus a read-only alternate-screen property. Link destinations, explicit SGR underlines, emulator protocol handling and program cursor state are retained. The Pane does not implement another terminal parser.
 
+The private GTK4 renderer also fits oversized private-use icon glyphs into their allocated cells, including supplementary private-use characters. It scales only drawings that would overlap following text; Unicode cell widths, cursor movement, selection, copied text and ordinary glyph overhang remain unchanged. System VTE retains its own glyph rendering. Refresh the private library as well as the application when adopting this patch.
+
 To build these hooks privately after the normal Meson setup:
 
 ```fish

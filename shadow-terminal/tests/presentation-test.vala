@@ -357,6 +357,45 @@ int main (string[] args) {
             parent.destroy (); window.close_workspace ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
+    Test.add_func ("/presentation/private-use-icons-fit-cells", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "icon-cells", "--cwd", "/tmp", "--input", "terminal"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            if (!session.style_fonts_available ()) Test.skip ("Private VTE drawing hook unavailable");
+            else {
+                var terminal = session.terminal;
+                terminal.set_font (Pango.FontDescription.from_string ("DejaVu Sans Mono, Symbols Nerd Font 24"));
+                terminal.set_color_foreground ({1, 1, 1, 1}); terminal.set_color_background ({0, 0, 0, 1});
+                foreach (double zoom in new double[] {1, 1.4}) {
+                    terminal.font_scale = zoom;
+                    terminal.feed ("\x1b[2J\x1b[H\x1b[?25l".data); settle ();
+                    long initial_col, initial_row; terminal.get_cursor_position (out initial_col, out initial_row);
+                    var empty = texture (terminal, window);
+                    terminal.feed ("\uf07c".data); settle ();
+                    var icon = texture (terminal, window);
+                    var before = new uint8[empty.get_width () * empty.get_height () * 4];
+                    var after = new uint8[icon.get_width () * icon.get_height () * 4];
+                    empty.download (before, empty.get_width () * 4); icon.download (after, icon.get_width () * 4);
+                    int inside = 0, outside = 0;
+                    for (int y = 0; y < icon.get_height (); y++) for (int x = 0; x < icon.get_width (); x++) {
+                        int pos = (y * icon.get_width () + x) * 4;
+                        if (before[pos] != after[pos] || before[pos + 1] != after[pos + 1] || before[pos + 2] != after[pos + 2]) {
+                            if (x >= 14 + terminal.get_char_width ()) outside++; else inside++;
+                        }
+                    }
+                    Test.message ("Icon pixels inside=%d outside=%d at zoom %.1f", inside, outside, zoom);
+                    assert (inside > 20 && outside == 0);
+                    long col, row; terminal.get_cursor_position (out col, out row);
+                    assert (col == initial_col + 1 && row == initial_row);
+                    icon.save_to_png ("/tmp/shadow-term-icon-cells.png");
+                }
+            }
+            window.close_workspace ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/documentation-source-navigation-and-source-preservation", () => {
         try {
             var host = test_host ();
