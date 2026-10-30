@@ -9,7 +9,7 @@
                                  for (double j = 1.0 / 6.0; j < columns; j += 0.5) {
                                          m_draw.fill_rectangle(
                                                                   xl + j * column_width,
-@@ -9607,6 +9607,31 @@
+@@ -9607,6 +9607,32 @@
                          items[item_count].c = bidirow->vis_get_shaped_char(vcol, c);
                          items[item_count].columns = j - lcol;
                          items[item_count].x = (vcol - (bidirow->vis_is_rtl(vcol) ? items[item_count].columns - 1 : 0)) * column_width;
@@ -30,6 +30,7 @@
 +                            current->attr.attr == next->attr.attr &&
 +                            current->attr.colors() == next->attr.colors() &&
 +                            !nhyperlink && next->attr.hyperlink_idx == 0 && !nhilite &&
++                            !(regex_match_has_current() && m_match_span.contains(row, j)) &&
 +                            current->attr.has_none(VTE_ATTR_UNDERLINE_MASK | VTE_ATTR_STRIKETHROUGH_MASK |
 +                                                   VTE_ATTR_OVERLINE_MASK | VTE_ATTR_BLINK_MASK) &&
 +                            !bidirow->vis_is_rtl(vcol) && bidirow->log2vis(j) == vcol + 1 &&
@@ -41,7 +42,7 @@
                          items[item_count].y = y;
                          items[item_count].mirror = bidirow->vis_is_rtl(vcol);
                          items[item_count].box_mirror = !!(row_data->attr.bidi_flags & VTE_BIDI_FLAG_BOX_MIRROR);
-@@ -9683,6 +9708,9 @@
+@@ -9683,6 +9709,9 @@
  void
  Terminal::paint_cursor()
  {
@@ -51,7 +52,7 @@
          vte::view::DrawingContext::TextRequest item;
          vte::grid::row_t drow;
          vte::grid::column_t lcol, vcol;
-@@ -10723,6 +10751,8 @@
+@@ -10723,6 +10752,8 @@
  	/* Clear the scrollback buffers and reset the cursors. Switch to normal screen. */
  	if (clear_history) {
                  m_screen = &m_normal_screen;
