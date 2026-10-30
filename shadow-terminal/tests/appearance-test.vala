@@ -70,7 +70,7 @@ int main (string[] args) {
         } catch (Error error) { Test.message (error.message); Test.fail (); }
         if (directory != null) DirUtils.remove (directory);
     });
-    Test.add_func ("/appearance/shortcut-capture-categories-and-cancellation", () => {
+    Test.add_func ("/appearance/shortcut-list-keycaps-and-cancellation", () => {
         string? directory = null;
         try {
             directory = DirUtils.make_tmp ("shadow-shortcut-ui-XXXXXX");
@@ -82,14 +82,27 @@ int main (string[] args) {
             var loop = new MainLoop ();
             Timeout.add (100, () => { loop.quit (); return Source.REMOVE; }); loop.run ();
             var view = (Shadow.ShortcutSettings) find_control (dialog.child, "pref-shortcuts");
-            var content = view.get_first_child ().get_next_sibling ();
-            assert (content.get_first_child () is Gtk.StackSidebar);
-            var categories = (Gtk.Stack) content.get_last_child ();
-            assert (categories.get_pages ().get_n_items () == 5);
-            var row = (Gtk.ListBoxRow) ((Gtk.ListBox) categories.visible_child).get_first_child ();
+            var search = (Gtk.SearchEntry) view.get_first_child ();
+            var list = (Gtk.ListBox) search.get_next_sibling ();
+            int count = 0;
+            for (var child = list.get_first_child (); child != null; child = child.get_next_sibling ()) count++;
+            assert (count == Shadow.Preferences.ACTIONS.length);
+            var row = (Gtk.ListBoxRow) list.get_first_child ();
             var capture = (Gtk.Button) row.child.get_first_child ().get_next_sibling ();
-            assert (capture.child is Gtk.Label);
-            assert (((Gtk.Label) capture.child).label == settings.shortcut_label ("new-tab"));
+            assert (capture.child is Gtk.Box);
+            assert (((Gtk.Label) capture.child.get_last_child ()).label == "T");
+            assert (find_control (capture.child, "keycap") != null);
+            dialog.set_default_size (580, 520);
+            foreach (bool dark in new bool[] {false, true}) {
+                Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = dark;
+                Timeout.add (80, () => { loop.quit (); return Source.REMOVE; }); loop.run ();
+                var snapshot = new Gtk.Snapshot ();
+                new Gtk.WidgetPaintable (dialog).snapshot (snapshot, dialog.get_width (), dialog.get_height ());
+                ((Gtk.Native) dialog).get_renderer ().render_texture (snapshot.to_node (), null).save_to_png (
+                    dark ? "/tmp/shadow-term-shortcuts-dark.png" : "/tmp/shadow-term-shortcuts-light.png");
+                assert (capture.get_width () > 0 && capture.get_width () < list.get_width ());
+            }
+            Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = false;
             string original = settings.shortcut ("new-tab");
             capture.clicked ();
             assert (view.handle_key (Gdk.Key.Escape, 0) && settings.shortcut ("new-tab") == original);
@@ -97,6 +110,28 @@ int main (string[] args) {
             assert (settings.shortcut ("new-tab") == original);
             assert (((Gtk.Label) find_control (dialog.child, "pref-status")).label.has_prefix ("Already assigned"));
             assert (view.handle_key (Gdk.Key.BackSpace, 0) && settings.shortcut ("new-tab") == "");
+            assert (capture.child is Gtk.Label && ((Gtk.Label) capture.child).label == "Disabled");
+            settings.reset_shortcut ("new-tab");
+            capture.clicked ();
+            assert (capture.child is Gtk.Label && ((Gtk.Label) capture.child).label == "Press shortcut…");
+            search.text = "  zoom  "; search.search_changed ();
+            assert (!row.get_child_visible ());
+            int visible = 0;
+            for (var child = list.get_first_child (); child != null; child = child.get_next_sibling ()) {
+                if (child.get_child_visible ()) visible++;
+            }
+            assert (visible == 3);
+            assert (!view.handle_key (Gdk.Key.x, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK));
+            assert (settings.shortcut ("new-tab") == original && capture.child is Gtk.Box);
+            search.text = ""; search.search_changed ();
+            capture.clicked ();
+            assert (view.handle_key (Gdk.Key.x, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK));
+            assert (((Gtk.Label) capture.child.get_last_child ()).label == "X");
+            var loaded = new Shadow.Preferences (Path.build_filename (directory, "preferences.ini"));
+            assert (loaded.shortcut ("new-tab") == settings.shortcut ("new-tab"));
+            settings.set_shortcut ("new-tab", "<Control>plus");
+            assert (((Gtk.Label) capture.child.get_first_child ()).label == Gtk.accelerator_get_label (0, Gdk.ModifierType.CONTROL_MASK));
+            assert (((Gtk.Label) capture.child.get_last_child ()).label == "+");
             capture.clicked (); pages.visible_child_name = "input";
             assert (!view.handle_key (Gdk.Key.x, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK));
             settings.reset_shortcut ("new-tab");
