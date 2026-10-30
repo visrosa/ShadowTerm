@@ -1,0 +1,106 @@
+--- a/src/reader/reader.rs
++++ b/src/reader/reader.rs
+@@ -2567,11 +2567,103 @@
+ impl<'a> Reader<'a> {
+     /// Read a command to execute, respecting input bindings.
+     /// Return the command, or none if we were asked to cancel (e.g. SIGHUP).
++    // A disposable, Linux-only reader-seam experiment. No native key loop runs
++    // while the peer owns the read. Unsupported reads keep the ordinary reader.
++    #[cfg(target_os = "linux")]
++    fn external_reader_probe(&mut self, nchars: Option<NonZeroUsize>) -> Option<Option<WString>> {
++        use std::io::{Read, Write};
++        use std::os::unix::net::UnixStream;
++        static NEXT_READ: AtomicU64 = AtomicU64::new(1);
++        const LIMIT: usize = 1024 * 1024;
++        fn send(socket: &mut UnixStream, message: &str) -> std::io::Result<()> {
++            if message.len() > LIMIT { return Err(std::io::ErrorKind::InvalidData.into()); }
++            socket.write_all(&(message.len() as u32).to_be_bytes())?;
++            socket.write_all(message.as_bytes())
++        }
++        fn receive(socket: &mut UnixStream) -> std::io::Result<String> {
++            let mut size = [0; 4]; socket.read_exact(&mut size)?;
++            let size = u32::from_be_bytes(size) as usize;
++            if size > LIMIT { return Err(std::io::ErrorKind::InvalidData.into()); }
++            let mut data = vec![0; size]; socket.read_exact(&mut data)?;
++            String::from_utf8(data).map_err(|_| std::io::ErrorKind::InvalidData.into())
++        }
++        if self.conf.in_silent_mode || nchars.is_some() || self.conf.inputfd != STDIN_FILENO {
++            return None;
++        }
++        let path = self.vars().get(L!("FISH_EXTERNAL_READER_PROBE"))?.as_string();
++        if path.is_empty() { return None; }
++        let mut socket = UnixStream::connect(fish_widestring::wcs2osstring(&path)).ok()?;
++        let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
++        let mut size = std::mem::size_of_val(&credentials) as libc::socklen_t;
++        if unsafe { libc::getsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED,
++                     (&mut credentials as *mut libc::ucred).cast(), &mut size) } != 0 ||
++           credentials.uid != unsafe { libc::geteuid() } { return None; }
++        socket.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
++        socket.set_write_timeout(Some(Duration::from_secs(3))).ok()?;
++        let read_id = NEXT_READ.fetch_add(1, Ordering::Relaxed);
++        let kind = if self.conf.syntax_check_ok { "command" } else { "literal" };
++        let mut draft = String::from_utf8(fish_widestring::wcs2bytes(self.command_line.text())).ok()?;
++        loop {
++            send(&mut socket, &format!("v1\0begin\0{read_id}\0{kind}\0{draft}")).ok()?;
++            let message = match receive(&mut socket) {
++                Ok(value) => value,
++                Err(_) => {
++                    let retained = bytes2wcstring(draft.as_bytes());
++                    self.set_buffer_maintaining_pager(&retained, retained.len());
++                    return None;
++                }
++            };
++            let mut fields = message.splitn(3, '\0');
++            let action = fields.next()?;
++            if fields.next()? != read_id.to_string() { return None; }
++            match action {
++                "eof" => { self.exit_loop_requested = true; return Some(None); }
++                "interrupt" => {
++                    self.parser.set_last_statuses(Statuses::just(130));
++                    return Some(None);
++                }
++                "native" => {
++                    draft = fields.next().unwrap_or("").to_owned();
++                    if draft.contains('\0') { return None; }
++                    let retained = bytes2wcstring(draft.as_bytes());
++                    self.set_buffer_maintaining_pager(&retained, retained.len());
++                    send(&mut socket, &format!("native\0{read_id}")).ok()?;
++                    return None;
++                }
++                "submit" => {
++                    let source = fields.next()?;
++                    if source.contains('\0') { return None; }
++                    let source = bytes2wcstring(source.as_bytes());
++                    if self.conf.syntax_check_ok {
++                        if let Err(issue) = detect_parse_errors(&source, None, true) {
++                            draft = String::from_utf8(fish_widestring::wcs2bytes(&source)).ok()?;
++                            let result = if issue.incomplete && !issue.error { "incomplete" } else { "rejected" };
++                            send(&mut socket, &format!("{result}\0{read_id}")).ok()?;
++                            continue;
++                        }
++                    }
++                    self.set_buffer_maintaining_pager(&source, source.len());
++                    if self.conf.syntax_check_ok { self.add_to_history(); }
++                    let _ = send(&mut socket, &format!("accepted\0{read_id}"));
++                    return Some(Some(source));
++                }
++                _ => return None,
++            }
++        }
++    }
++
+     fn readline(
+         &mut self,
+         old_modes: Option<Termios>,
+         nchars: Option<NonZeroUsize>,
+     ) -> Option<WString> {
++        #[cfg(target_os = "linux")]
++        if let Some(result) = self.external_reader_probe(nchars) {
++            if let Some(old_modes) = old_modes {
++                let _ = tcsetattr(unsafe { BorrowedFd::borrow_raw(self.conf.inputfd) }, SetArg::TCSANOW, &old_modes);
++            }
++            return result;
++        }
+         let mut tty = TtyHandoff::new(reader_save_screen_state);
+ 
+         self.rls = Some(ReadlineLoopState::new());
