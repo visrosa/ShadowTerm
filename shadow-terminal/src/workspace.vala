@@ -115,7 +115,8 @@ namespace Shadow {
             tab_scroll = new Gtk.ScrolledWindow () {child = tabs, hexpand = true,
                 hscrollbar_policy = Gtk.PolicyType.EXTERNAL, vscrollbar_policy = Gtk.PolicyType.NEVER,
                 propagate_natural_width = false};
-            var strip = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {hexpand = true};
+            var strip = new PaneTabStrip ();
+            strip.margin_start = 6; strip.margin_end = 6;
             strip.append (create); strip.append (tab_scroll);
             header.title_widget = strip;
             header.pack_end (menus);
@@ -125,6 +126,7 @@ namespace Shadow {
             pages.transition_type = Gtk.StackTransitionType.NONE;
             pages.hhomogeneous = false; pages.vhomogeneous = false;
             child = pages;
+            pages.add_css_class ("pane-liner");
             close_request.connect (() => { close_workspace (); return true; });
             map.connect (() => {
                 if (placed) return;
