@@ -54,3 +54,5 @@ nice -n 15 python3 tests/integration.py --cv ../../ClaudeVassal
 ```
 
 It creates a private Xvfb/D-Bus session using software rendering with D-Bus service activation disabled, drives the actual GTK editor, and verifies source in a stub Claude CLI's argv and the session cache, including recall and resubmission. It shuts down its own processes and uses no live API or desktop windows. `--screenshot PATH` optionally captures the private test window and requires ImageMagick's `import`.
+
+[Consumer contracts](docs/consumer-contracts.md) compares fish, ordinary programs and the CV broker, and documents the reusable exact-source lifecycle and non-shell fixture.

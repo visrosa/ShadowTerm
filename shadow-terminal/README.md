@@ -231,3 +231,5 @@ The existing [CV shadow client](../rich-input/README.md) remains available indep
 
 [Compiler warning boundaries](docs/compiler-warnings.md) records the full-build warning inventory, corrected C binding contracts and remaining generator/toolkit diagnostics.
 [Graphics protocol feasibility](docs/graphics-protocols.md) documents the pinned VTE/ctx audit and isolated producer/framebuffer fixtures. Kitty graphics and ctx vector rendering are not implemented or advertised by Shadow Term.
+
+[Pane extraction](docs/pane-extraction.md) documents current VTE snapshots and the semantic-metadata boundary. [Persistent hosting](docs/hosting-lifecycle.md) describes the tasklineUI fixture and a separate last-view dismissal contract.
