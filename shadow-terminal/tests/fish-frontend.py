@@ -149,7 +149,7 @@ def worker(tmp):
                             "if sys.argv[1] == 'context':\n" +
                             " path.with_suffix('.pending').write_text(json.dumps(sys.argv[2:]))\n" +
                             " os.replace(path.with_suffix('.pending'), path)\n" +
-                            f"os.execv({str(harness.ROOT / 'build/vcom-shell')!r}, ['vcom-shell', *sys.argv[1:]])\n")
+                            f"os.execv({str(harness.BUILD / 'vcom-shell')!r}, ['vcom-shell', *sys.argv[1:]])\n")
         recorder.chmod(0o700)
 
         def prompt_fields():
@@ -243,7 +243,9 @@ def worker(tmp):
             clipboard.terminate()
             clipboard.wait(timeout=3)
         assert json.loads(read("argv")) == ["日本語 e\u0301", "literal $value", "first\nsecond\n"], read("argv")
-        time.sleep(0.1)
+        # The output file can appear before fish advertises a new prompt.
+        # A busy consumer intentionally takes the foreground-paste path.
+        harness.wait_for(lambda: "ready" in state(), "ready after Unicode command")
         # Incomplete Enter keeps the draft and adds a line, as fish would.
         text("for value in one two")
         xdo("key", "Return")
@@ -253,12 +255,12 @@ def worker(tmp):
         text("end")
         xdo("key", "ctrl+Return")
         harness.wait_for(lambda: read("loop") == "one\ntwo\n", "multiline loop")
-        time.sleep(0.1)
+        harness.wait_for(lambda: "ready" in state(), "ready after multiline loop")
         # Recall proves Pane retained exact accepted input for re-editing.
         xdo("key", "ctrl+shift+l")
         xdo("key", "ctrl+Return")
         harness.wait_for(lambda: read("loop") == "one\ntwo\none\ntwo\n", "accepted-source recall")
-        time.sleep(0.1)
+        harness.wait_for(lambda: "ready" in state(), "ready after recalled command")
         # A partial native line must not be prefixed to a Composer submission.
         xdo("key", "ctrl+shift+m")
         text("KEEP_NATIVE_PREFIX ")
@@ -269,7 +271,7 @@ def worker(tmp):
         assert not (tmp / "guarded").exists()
         xdo("key", "ctrl+shift+m", "ctrl+u", "ctrl+shift+m", "ctrl+Return")
         harness.wait_for(lambda: read("guarded") == "safe", "native-buffer guard retry")
-        time.sleep(0.1)
+        harness.wait_for(lambda: "ready" in state(), "ready after guard retry")
         # A foreground program receives ordinary terminal input and EOF.
         text(f"cat > {tmp}/program-input")
         xdo("key", "Return")
@@ -472,7 +474,7 @@ def worker(tmp):
         if visible():
             subprocess.run(["import", "-display", env["DISPLAY"], "-window", visible().splitlines()[0],
                             "/tmp/vcom-fish-failure.png"], timeout=4, check=False)
-        raise AssertionError(f"{error}; shell state {state()}; prompt {prompt_fields() if (tmp / 'prompt-context.json').exists() else None}") from error
+        raise AssertionError(f"{error}; shell state {state()}; prompt {prompt_fields()[:8] if (tmp / 'prompt-context.json').exists() else None}") from error
     finally:
         if app.poll() is None:
             listing = subprocess.run([binary, "--list"], env=env, timeout=4, capture_output=True, text=True)

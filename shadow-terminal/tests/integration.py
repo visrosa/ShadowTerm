@@ -13,7 +13,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build/shadow-term"
+BUILD = Path(os.environ.get("SHADOW_TERM_TEST_BUILD", ROOT / "build")).resolve()
+BINARY = BUILD / "shadow-term"
 
 
 def wait_for(check, description, timeout=8):
@@ -81,9 +82,9 @@ def worker(tmp):
         known_children[pid] = identity(pid)
 
     try:
-        subprocess.run([str(ROOT / "build/editor-test")], env=env, check=True, timeout=5)
-        subprocess.run([str(ROOT / "build/appearance-test")], env=env, check=True, timeout=5)
-        subprocess.run([str(ROOT / "build/presentation-test")], env=env, check=True, timeout=25)
+        subprocess.run([str(BUILD / "editor-test")], env=env, check=True, timeout=5)
+        subprocess.run([str(BUILD / "appearance-test")], env=env, check=True, timeout=5)
+        subprocess.run([str(BUILD / "presentation-test")], env=env, check=True, timeout=45)
         launch("--input", "terminal", "--cwd", str(tmp), "--size", "900x620")
         wait_for(lambda: window("default"), "initial terminal window")
         pid = wait_for(lambda: sessions().get("default", (None, 0))[1], "default shell PID")
@@ -274,9 +275,9 @@ def main():
         if os.environ.get("SHADOW_TERM_PRIVATE_TEST") != "1":
             raise SystemExit("Workers must be launched by the private-display harness")
         if args.presentation:
-            subprocess.run([str(ROOT / "build/editor-test")], check=True, timeout=8)
-            subprocess.run([str(ROOT / "build/appearance-test")], check=True, timeout=5)
-            subprocess.run([str(ROOT / "build/presentation-test")], check=True, timeout=25)
+            subprocess.run([str(BUILD / "editor-test")], check=True, timeout=8)
+            subprocess.run([str(BUILD / "appearance-test")], check=True, timeout=5)
+            subprocess.run([str(BUILD / "presentation-test")], check=True, timeout=45)
         elif args.paste:
             import runpy
             runpy.run_path(str(Path(__file__).with_name("native-paste.py")))["worker"](args.worker)

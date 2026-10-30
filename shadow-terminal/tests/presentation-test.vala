@@ -108,6 +108,20 @@ private Gdk.Texture texture (Gtk.Widget widget, Gtk.Window window) {
     return ((Gtk.Native) window).get_renderer ().render_texture (snapshot.to_node (), null);
 }
 
+private Gdk.Rectangle changed_ink (Gdk.Texture before, Gdk.Texture after) {
+    int width = after.get_width (), height = after.get_height ();
+    var a = new uint8[width * height * 4]; var b = new uint8[a.length];
+    before.download (a, width * 4); after.download (b, width * 4);
+    int left = width, top = height, right = -1, bottom = -1;
+    for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
+        int i = (y * width + x) * 4;
+        if (int.max (int.max (((int) a[i] - b[i]).abs (), ((int) a[i + 1] - b[i + 1]).abs ()), ((int) a[i + 2] - b[i + 2]).abs ()) < 32) continue;
+        left = int.min (left, x); right = int.max (right, x);
+        top = int.min (top, y); bottom = int.max (bottom, y);
+    }
+    return {left, top, int.max (0, right - left + 1), int.max (0, bottom - top + 1)};
+}
+
 private uint8 background_alpha (Gtk.Widget widget, Gtk.Window window) {
     var image = texture (widget, window);
     var pixels = new uint8[image.get_width () * image.get_height () * 4];
@@ -420,7 +434,7 @@ int main (string[] args) {
             parent.destroy (); window.close_workspace ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
-    Test.add_func ("/presentation/private-use-icons-fit-cells", () => {
+    Test.add_func ("/presentation/private-use-icons-proportional-spans", () => {
         try {
             var host = test_host ();
             var request = Shadow.Request.parse ({"shadow-term", "--session", "icon-cells", "--cwd", "/tmp", "--input", "terminal"});
@@ -430,30 +444,65 @@ int main (string[] args) {
             if (!session.style_fonts_available ()) Test.skip ("Private VTE drawing hook unavailable");
             else {
                 var terminal = session.terminal;
-                terminal.set_font (Pango.FontDescription.from_string ("DejaVu Sans Mono, Symbols Nerd Font 24"));
+                var face = Pango.FontDescription.from_string ("DejaVu Sans Mono, Symbols Nerd Font 24");
+                terminal.set_font (face);
                 terminal.set_color_foreground ({1, 1, 1, 1}); terminal.set_color_background ({0, 0, 0, 1});
-                foreach (double zoom in new double[] {1, 1.4}) {
-                    terminal.font_scale = zoom;
-                    VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\x1b[?25l".data); settle ();
-                    long initial_col, initial_row; terminal.get_cursor_position (out initial_col, out initial_row);
-                    var empty = texture (terminal, window);
-                    VCom.TerminalBytes.feed (terminal, (char[]) "\uf07c".data); settle ();
-                    var icon = texture (terminal, window);
-                    var before = new uint8[empty.get_width () * empty.get_height () * 4];
-                    var after = new uint8[icon.get_width () * icon.get_height () * 4];
-                    empty.download (before, empty.get_width () * 4); icon.download (after, icon.get_width () * 4);
-                    int inside = 0, outside = 0;
-                    for (int y = 0; y < icon.get_height (); y++) for (int x = 0; x < icon.get_width (); x++) {
-                        int pos = (y * icon.get_width () + x) * 4;
-                        if (before[pos] != after[pos] || before[pos + 1] != after[pos + 1] || before[pos + 2] != after[pos + 2]) {
-                            if (x >= 14 + terminal.get_char_width ()) outside++; else inside++;
+                foreach (string glyph in new string[] {"\uf07c", ((unichar) 0xf0001).to_string ()}) {
+                    foreach (double zoom in new double[] {1, 1.4}) {
+                        terminal.font_scale = zoom;
+                        Gdk.Rectangle single = {}, reserved = {};
+                        foreach (string suffix in new string[] {"", " ", "  ", "\u2002"}) {
+                            VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\x1b[?25l".data); settle ();
+                            long initial_col, initial_row; terminal.get_cursor_position (out initial_col, out initial_row);
+                            var empty = texture (terminal, window);
+                            VCom.TerminalBytes.feed (terminal, (char[]) (glyph + suffix).data); settle ();
+                            var image = texture (terminal, window);
+                            var ink = changed_ink (empty, image);
+                            var layout = terminal.create_pango_layout (glyph);
+                            var scaled_face = face.copy (); scaled_face.set_size ((int) (face.get_size () * zoom));
+                            layout.set_font_description (scaled_face);
+                            Pango.Rectangle natural, logical; layout.get_pixel_extents (out natural, out logical);
+                            double ratio = (double) ink.width / ink.height;
+                            double expected = (double) natural.width / natural.height;
+                            Test.message ("Icon %dx%d natural %dx%d zoom %.1f suffix bytes %u", ink.width, ink.height, natural.width, natural.height, zoom, suffix.length);
+                            assert (ink.width > 5 && ink.height > 5);
+                            assert ((ratio / expected - 1).abs () < 0.18);
+                            long col, row; terminal.get_cursor_position (out col, out row);
+                            assert (col == initial_col + 1 + suffix.char_count () && row == initial_row);
+                            VCom.TerminalBytes.feed (terminal, (char[]) "Z".data); settle ();
+                            assert ((terminal.get_text_format (Vte.Format.TEXT) ?? "").contains (glyph + suffix + "Z"));
+                            if (suffix == "") single = ink;
+                            else {
+                                assert (ink.width > single.width && ink.height > single.height);
+                                if (suffix == " ") reserved = ink;
+                                else assert ((ink.width - reserved.width).abs () <= 1 && (ink.height - reserved.height).abs () <= 1);
+                            }
                         }
+                        VCom.TerminalBytes.feed (terminal, (char[]) ("\x1b[2J\x1b[1;%ldH".printf (terminal.get_column_count ())).data); settle ();
+                        var edge_empty = texture (terminal, window);
+                        VCom.TerminalBytes.feed (terminal, (char[]) glyph.data); settle ();
+                        var edge = changed_ink (edge_empty, texture (terminal, window));
+                        assert ((edge.width - single.width).abs () <= 1 && (edge.height - single.height).abs () <= 1);
+                        // Repainting a borrowed space must remove the former wide ink.
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\uf07c  ".data); settle ();
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[1;2HX".data); settle ();
+                        var overwritten = texture (terminal, window);
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\uf07cX ".data); settle ();
+                        assert (same_pixels (overwritten, texture (terminal, window)));
+                        // Attribute mismatch and a cursor on the space forbid borrowing.
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\uf07c\x1b[31m \x1b[0m".data); settle ();
+                        var different = texture (terminal, window);
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\uf07c".data); settle ();
+                        assert (same_pixels (different, texture (terminal, window)));
+                        terminal.cursor_blink_mode = Vte.CursorBlinkMode.OFF;
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\x1b[?25h \x1b[1;2H".data); settle ();
+                        var cursor_empty = texture (terminal, window);
+                        VCom.TerminalBytes.feed (terminal, (char[]) ("\x1b[H" + glyph + " \x1b[1;2H").data); settle ();
+                        var cursor_ink = changed_ink (cursor_empty, texture (terminal, window));
+                        assert ((cursor_ink.width - single.width).abs () <= 1 && (cursor_ink.height - single.height).abs () <= 1);
+                        VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[?25l".data); settle ();
+                        texture (terminal, window).save_to_png ("/tmp/shadow-term-icon-cells.png");
                     }
-                    Test.message ("Icon pixels inside=%d outside=%d at zoom %.1f", inside, outside, zoom);
-                    assert (inside > 20 && outside == 0);
-                    long col, row; terminal.get_cursor_position (out col, out row);
-                    assert (col == initial_col + 1 && row == initial_row);
-                    icon.save_to_png ("/tmp/shadow-term-icon-cells.png");
                 }
             }
             window.close_workspace ();

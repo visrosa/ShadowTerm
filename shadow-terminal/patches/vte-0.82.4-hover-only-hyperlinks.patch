@@ -9,7 +9,39 @@
                                  for (double j = 1.0 / 6.0; j < columns; j += 0.5) {
                                          m_draw.fill_rectangle(
                                                                   xl + j * column_width,
-@@ -9683,6 +9683,9 @@
+@@ -9607,6 +9607,31 @@
+                         items[item_count].c = bidirow->vis_get_shaped_char(vcol, c);
+                         items[item_count].columns = j - lcol;
+                         items[item_count].x = (vcol - (bidirow->vis_is_rtl(vcol) ? items[item_count].columns - 1 : 0)) * column_width;
++#if VTE_GTK == 4
++                        // GTK4 invalidates the whole widget, so a space becoming
++                        // text or changing selection/cursor also repaints its icon.
++                        // Restrict borrowing to plain, equally styled LTR cells.
++                        auto const base = _vte_unistr_get_base(c);
++                        auto const private_use = c == base &&
++                                ((base >= 0xe000 && base <= 0xf8ff) ||
++                                 (base >= 0xf0000 && base <= 0xffffd) ||
++                                 (base >= 0x100000 && base <= 0x10fffd));
++                        auto const next = _vte_row_data_get(row_data, j);
++                        auto const current = _vte_row_data_get(row_data, lcol);
++                        if (private_use && !(base >= 0xe0a0 && base <= 0xe0d7) &&
++                            j == lcol + 1 && j < column_count && next &&
++                            (next->c == ' ' || next->c == 0x2002) &&
++                            current->attr.attr == next->attr.attr &&
++                            current->attr.colors() == next->attr.colors() &&
++                            !nhyperlink && next->attr.hyperlink_idx == 0 && !nhilite &&
++                            current->attr.has_none(VTE_ATTR_UNDERLINE_MASK | VTE_ATTR_STRIKETHROUGH_MASK |
++                                                   VTE_ATTR_OVERLINE_MASK | VTE_ATTR_BLINK_MASK) &&
++                            !bidirow->vis_is_rtl(vcol) && bidirow->log2vis(j) == vcol + 1 &&
++                            selected == cell_is_selected_log(j, row) &&
++                            !(m_modes_private.DEC_TEXT_CURSOR() && row == m_screen->cursor.row &&
++                              (lcol == m_screen->cursor.col || j == m_screen->cursor.col)))
++                                items[item_count].columns = 2;
++#endif
+                         items[item_count].y = y;
+                         items[item_count].mirror = bidirow->vis_is_rtl(vcol);
+                         items[item_count].box_mirror = !!(row_data->attr.bidi_flags & VTE_BIDI_FLAG_BOX_MIRROR);
+@@ -9683,6 +9708,9 @@
  void
  Terminal::paint_cursor()
  {
@@ -19,7 +51,7 @@
          vte::view::DrawingContext::TextRequest item;
          vte::grid::row_t drow;
          vte::grid::column_t lcol, vcol;
-@@ -10723,6 +10726,8 @@
+@@ -10723,6 +10751,8 @@
  	/* Clear the scrollback buffers and reset the cursors. Switch to normal screen. */
  	if (clear_history) {
                  m_screen = &m_normal_screen;
@@ -114,40 +146,46 @@
                                   ratio);
 --- a/src/drawing-gsk.cc
 +++ b/src/drawing-gsk.cc
-@@ -209,6 +209,37 @@
+@@ -209,6 +209,43 @@
                          auto const from_string = ufi->using_pango_glyph_string.glyph_string;
                          if (from_string->num_glyphs == 0)
                                  break;
 +
-+                        // Private-use icon fonts can supply a two-cell drawing for
-+                        // a one-cell character. Fit only those drawings; terminal
-+                        // widths, cursor movement and ordinary text stay unchanged.
++                        // Paint spans may borrow one compatible following space; the
++                        // terminal grid and source retain their original allocation.
 +                        auto const base = _vte_unistr_get_base(c);
-+                        auto const private_use = (base >= 0xe000 && base <= 0xf8ff) ||
-+                                (base >= 0xf0000 && base <= 0xffffd) ||
-+                                (base >= 0x100000 && base <= 0x10fffd);
-+                        if (private_use) {
++                        auto const private_use = c == base &&
++                                ((base >= 0xe000 && base <= 0xf8ff) ||
++                                 (base >= 0xf0000 && base <= 0xffffd) ||
++                                 (base >= 0x100000 && base <= 0x10fffd));
++                        if (private_use && !(base >= 0xe0a0 && base <= 0xe0d7)) {
 +                                PangoRectangle ink;
 +                                pango_glyph_string_extents(from_string, node_font, &ink, nullptr);
 +                                auto const left = std::min(0.0, ink.x / double(PANGO_SCALE));
 +                                auto const right = std::max(double(uinfo->width),
 +                                        (ink.x + ink.width) / double(PANGO_SCALE));
-+                                auto const available = requests[i].columns * cell_width();
-+                                if (right - left > available) {
-+                                        flush_glyph_string(node_font, &rgba);
-+                                        auto const offset = GRAPHENE_POINT_INIT(float(-left), 0);
-+                                        auto node = gsk_text_node_new(node_font, from_string, &rgba, &offset);
-+                                        if (node != nullptr) {
-+                                                auto const origin = GRAPHENE_POINT_INIT(float(requests[i].x), float(y));
-+                                                gtk_snapshot_save(m_snapshot);
-+                                                gtk_snapshot_translate(m_snapshot, &origin);
-+                                                gtk_snapshot_scale(m_snapshot, available / (right - left), 1);
-+                                                gtk_snapshot_append_node(m_snapshot, node);
-+                                                gtk_snapshot_restore(m_snapshot);
-+                                                gsk_render_node_unref(node);
-+                                        }
-+                                        continue;
++                                auto const available = (right - left > cell_width() ? requests[i].columns : 1) * cell_width();
++                                auto const top = ink.y / double(PANGO_SCALE);
++                                auto const bottom = (ink.y + ink.height) / double(PANGO_SCALE);
++                                auto scale = std::min(1.0, available / (right - left));
++                                if (top < 0)
++                                        scale = std::min(scale, (y - requests[i].y) / -top);
++                                if (bottom > 0)
++                                        scale = std::min(scale, (requests[i].y + cell_height() - y) / bottom);
++                                flush_glyph_string(node_font, &rgba);
++                                auto const offset = GRAPHENE_POINT_INIT(float(-left), 0);
++                                auto node = gsk_text_node_new(node_font, from_string, &rgba, &offset);
++                                if (node != nullptr) {
++                                        auto const origin = GRAPHENE_POINT_INIT(
++                                                float(requests[i].x + (available - (right - left) * scale) / 2), float(y));
++                                        gtk_snapshot_save(m_snapshot);
++                                        gtk_snapshot_translate(m_snapshot, &origin);
++                                        gtk_snapshot_scale(m_snapshot, scale, scale);
++                                        gtk_snapshot_append_node(m_snapshot, node);
++                                        gtk_snapshot_restore(m_snapshot);
++                                        gsk_render_node_unref(node);
 +                                }
++                                continue;
 +                        }
  
                          auto to_glyphs = vte_glyphs_grow (&m_glyphs, from_string->num_glyphs);

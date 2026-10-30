@@ -176,7 +176,7 @@ Export reviewable fish definitions with `python3 completion-definitions.py --exp
 
 [VTE 0.82.4](https://github.com/GNOME/vte/tree/0.82.4) hardcodes idle OSC 8 link decoration and exposes neither host cursor visibility nor alternate-screen state through its public GTK API. The [small presentation patch](patches/vte-0.82.4-hover-only-hyperlinks.patch) adds opt-in widget classes for hover-only links and Composer-time cursor hiding, plus a read-only alternate-screen property. Link destinations, explicit SGR underlines, emulator protocol handling and program cursor state are retained. The Pane does not implement another terminal parser.
 
-The private GTK4 renderer also fits oversized private-use icon glyphs into their allocated cells, including supplementary private-use characters. It scales only drawings that would overlap following text; Unicode cell widths, cursor movement, selection, copied text and ordinary glyph overhang remain unchanged. System VTE retains its own glyph rendering. Refresh the private library as well as the application when adopting this patch.
+The private GTK4 renderer preserves private-use icon proportions, including supplementary private-use characters. A wide icon can use one compatible following SPACE or EN SPACE without changing either character’s logical width. Reserve a following space when a full-size wide icon is wanted. Beside text, at a row edge or across differing attributes, selection or cursor state, it shrinks uniformly into its own cell rather than compressing width alone. It never enlarges a naturally fitting glyph; combining clusters and Powerline separators retain their ordinary rendering. Cursor movement, wrapping and copied source remain unchanged. System VTE retains its own glyph rendering. Refresh the private library as well as the application when adopting this patch.
 
 To build these hooks privately after the normal Meson setup:
 
@@ -218,6 +218,8 @@ nice -n 15 python3 tests/integration.py --frontend
 nice -n 15 python3 tests/integration.py --paste
 nice -n 15 python3 tests/integration.py --presentation
 ```
+
+`SHADOW_TERM_TEST_BUILD=/absolute/build/path` selects a separately configured build for every harness executable and helper. Use it to validate a private compiler or installed-layout build without replacing the normal development artifacts.
 
 The native paste check covers small-paste compatibility, 81 KiB of dense lines, Primary Selection, indented Unicode source, open single quotes, VTE control normalization, single-step undo and responsiveness without execution.
 
