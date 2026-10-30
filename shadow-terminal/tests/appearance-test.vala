@@ -88,7 +88,8 @@ int main (string[] args) {
             assert (categories.get_pages ().get_n_items () == 5);
             var row = (Gtk.ListBoxRow) ((Gtk.ListBox) categories.visible_child).get_first_child ();
             var capture = (Gtk.Button) row.child.get_first_child ().get_next_sibling ();
-            assert (capture.child is Gtk.ShortcutLabel);
+            assert (capture.child is Gtk.Label);
+            assert (((Gtk.Label) capture.child).label == settings.shortcut_label ("new-tab"));
             string original = settings.shortcut ("new-tab");
             capture.clicked ();
             assert (view.handle_key (Gdk.Key.Escape, 0) && settings.shortcut ("new-tab") == original);

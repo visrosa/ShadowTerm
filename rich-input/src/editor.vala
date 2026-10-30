@@ -1,3 +1,10 @@
+namespace VCom.StyleProviders {
+    [CCode (cname = "gtk_style_context_add_provider_for_display", cheader_filename = "gtk/gtk.h")]
+    public extern void add (Gdk.Display display, Gtk.StyleProvider provider, uint priority);
+    [CCode (cname = "gtk_style_context_remove_provider_for_display", cheader_filename = "gtk/gtk.h")]
+    public extern void remove (Gdk.Display display, Gtk.StyleProvider provider);
+}
+
 // All offsets at the parser boundary are UTF-8 byte offsets. GtkTextBuffer
 // uses character offsets, so conversion happens only when tags are applied.
 public class RichSpan : Object {
@@ -21,8 +28,28 @@ public class RichInput : Gtk.TextView {
     private RichSpan[] analysis = {};
     private string analyzed_source = "";
     private Gtk.CssProvider font_css = new Gtk.CssProvider ();
+    private static uint next_font_id;
+    private string font_class;
+    private Gdk.Display? font_display;
+
+    public override void realize () {
+        if (font_display != get_display ()) {
+            if (font_display != null) VCom.StyleProviders.remove (font_display, font_css);
+            font_display = get_display ();
+            VCom.StyleProviders.add (font_display, font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+        }
+        base.realize ();
+    }
+
+    public override void unrealize () {
+        if (font_display != null) VCom.StyleProviders.remove (font_display, font_css);
+        font_display = null;
+        base.unrealize ();
+    }
 
     protected override void dispose () {
+        if (font_display != null) VCom.StyleProviders.remove (font_display, font_css);
+        font_display = null;
         // TextView does not own the layout of manually parented native popups.
         // Release these accessories before GTK checks for remaining children.
         var child = get_first_child ();
@@ -47,7 +74,14 @@ public class RichInput : Gtk.TextView {
         left_margin = right_margin = 18;
         top_margin = bottom_margin = 12;
         buffer.enable_undo = true;
-        get_style_context ().add_provider (font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+        // A unique selector keeps independent fonts scoped to each editor
+        // without deprecated per-widget StyleContext providers.
+        font_class = "vcom-font-%u".printf (++next_font_id);
+        add_css_class (font_class);
+        // Install before the first size request; TextView can cache its font
+        // during layout, before realization. Reattachment may change display.
+        font_display = get_display ();
+        VCom.StyleProviders.add (font_display, font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
         buffer.create_tag ("bold", "weight", Pango.Weight.BOLD);
         buffer.create_tag ("italic", "style", Pango.Style.ITALIC);
         buffer.create_tag ("code", "family", "monospace");
@@ -98,8 +132,8 @@ public class RichInput : Gtk.TextView {
         if (size <= 0) size = 12;
         string style = description.get_style () == Pango.Style.ITALIC ? "italic" :
             description.get_style () == Pango.Style.OBLIQUE ? "oblique" : "normal";
-        font_css.load_from_string ("textview { font-family: \"%s\"; font-size: %s%s; font-weight: %d; font-style: %s; }".printf (
-            family, size.to_string (), description.get_size_is_absolute () ? "px" : "pt", (int) description.get_weight (), style));
+        font_css.load_from_string ("textview.%s { font-family: \"%s\"; font-size: %s%s; font-weight: %d; font-style: %s; }".printf (
+            font_class, family, size.to_string (), description.get_size_is_absolute () ? "px" : "pt", (int) description.get_weight (), style));
     }
 
     public Gtk.Box formatting_toolbar () {

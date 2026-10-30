@@ -140,7 +140,7 @@ public class Composer : Gtk.Application {
                         last_source = message.get_string_member ("source");
                         ready = message.get_boolean_member ("ready");
                         if (message.get_boolean_member ("truncated"))
-                            terminal.feed (_("Earlier terminal output omitted\r\n").data);
+                            VCom.TerminalBytes.feed (terminal, (char[]) _("Earlier terminal output omitted\r\n").data);
                         update_ready ();
                         break;
                     case "ready":
@@ -148,7 +148,7 @@ public class Composer : Gtk.Application {
                         update_ready ();
                         break;
                     case "terminal":
-                        terminal.feed (Base64.decode (message.get_string_member ("data")));
+                        VCom.TerminalBytes.feed (terminal, (char[]) Base64.decode (message.get_string_member ("data")));
                         break;
                     case "source":
                         last_source = message.get_string_member ("text");
@@ -190,7 +190,7 @@ public class Composer : Gtk.Application {
             if (incoming.len > 2 * 1024 * 1024) throw new IOError.INVALID_DATA ("Frame too large");
             var chunk = yield input.read_bytes_async (65536);
             if (chunk.get_size () == 0) return null;
-            incoming.append (chunk.get_data ());
+            VCom.ByteBuffer.append (incoming, chunk);
         }
     }
 

@@ -187,16 +187,16 @@ namespace Shadow {
                     (state & Gtk.accelerator_get_default_mod_mask ()) == Gdk.ModifierType.CONTROL_MASK) {
                     uint lower = Gdk.keyval_to_lower (key);
                     if (lower == Gdk.Key.c && !editor.buffer.has_selection) {
-                        terminal.feed_child ("\x03".data); return true;
+                        VCom.TerminalBytes.feed_child (terminal, (char[]) "\x03".data); return true;
                     }
                     if (lower == Gdk.Key.d && editor.source () == "") {
-                        terminal.feed_child ("\x04".data); return true;
+                        VCom.TerminalBytes.feed_child (terminal, (char[]) "\x04".data); return true;
                     }
                 }
                 if (shell_editor && editor.has_focus && input_session.ready &&
                     (state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)) == Gdk.ModifierType.CONTROL_MASK) {
                     uint lower = Gdk.keyval_to_lower (key);
-                    if (lower == Gdk.Key.l && !input_session.pending) { terminal.feed_child ("\x0c".data); return true; }
+                    if (lower == Gdk.Key.l && !input_session.pending) { VCom.TerminalBytes.feed_child (terminal, (char[]) "\x0c".data); return true; }
                     if (lower == Gdk.Key.c && !editor.buffer.has_selection) {
                         if (input_session.pending) input_session.reject ("Submission cancelled; draft retained");
                         else {
@@ -205,11 +205,11 @@ namespace Shadow {
                             editor.buffer.begin_user_action ();
                             editor.buffer.delete (ref start, ref end);
                             editor.buffer.end_user_action ();
-                            terminal.feed_child ("\x03".data);
+                            VCom.TerminalBytes.feed_child (terminal, (char[]) "\x03".data);
                         }
                         return true;
                     }
-                    if (lower == Gdk.Key.d && editor.source () == "" && !input_session.pending) { terminal.feed_child ("\x04".data); return true; }
+                    if (lower == Gdk.Key.d && editor.source () == "" && !input_session.pending) { VCom.TerminalBytes.feed_child (terminal, (char[]) "\x04".data); return true; }
                 }
                 if (key == Gdk.Key.Escape && editor.has_focus && input_session.pending) {
                     input_session.reject ("Submission cancelled; draft retained");
@@ -542,7 +542,7 @@ namespace Shadow {
             // Never send a prompt-control binding to a foreground program.
             if (!presentation_dirty || !shell_editor || !input_session.ready || input_session.pending) return;
             presentation_dirty = false;
-            terminal.feed_child ("\x1b\x10".data);
+            VCom.TerminalBytes.feed_child (terminal, (char[]) "\x1b\x10".data);
         }
 
         private void remember_input (string source_text) {
@@ -576,7 +576,7 @@ namespace Shadow {
             // Return must follow VTE's closing bracketed-paste marker, rather
             // than becoming part of a paste that the program only inserts.
             if (source != "") terminal.paste_text (source);
-            terminal.feed_child ("\r".data);
+            VCom.TerminalBytes.feed_child (terminal, (char[]) "\r".data);
             // Arbitrary programs have no source-acceptance acknowledgement.
             // Clear only the snapshot just queued to the live emulator.
             if (source != "") remember_input (source);
@@ -593,7 +593,7 @@ namespace Shadow {
                 input_session.prepare (submitted_source);
                 // fish's binding retrieves source over the bridge. No source,
                 // markup, quoting or terminal paste conversion occurs here.
-                terminal.feed_child ("\x1b\x0f".data);
+                VCom.TerminalBytes.feed_child (terminal, (char[]) "\x1b\x0f".data);
             } catch (IOError error) { feedback.label = error.message; feedback_bar.visible = true; }
         }
 
@@ -1014,7 +1014,7 @@ namespace Shadow {
             Gtk.Window.set_default_icon_name ("io.github.visrosa.Vibrant.ShadowTerm");
             Gtk.IconTheme.get_for_display (Gdk.Display.get_default ()).add_resource_path ("/io/github/visrosa/Vibrant/ShadowTerm/icons");
             preferences = new Preferences ();
-            Gtk.StyleContext.add_provider_for_display (Gdk.Display.get_default (), appearance_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            Native.add_css (Gdk.Display.get_default (), appearance_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
             update_style ();
             preferences.changed.connect (update_style);
             Granite.Settings.get_default ().notify["prefers-color-scheme"].connect (update_style);

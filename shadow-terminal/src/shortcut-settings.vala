@@ -80,8 +80,11 @@ namespace Shadow {
             foreach (var identity in buttons.get_keys ()) {
                 string action = identity.substring (identity.index_of_char (':') + 1);
                 var button = buttons.lookup (identity);
-                button.child = action == recording ? (Gtk.Widget) new Gtk.Label ("Press shortcut…") :
-                    new Gtk.ShortcutLabel (settings.shortcut (action)) {disabled_text = "Disabled"};
+                string shortcut = settings.shortcut (action);
+                uint key = 0; Gdk.ModifierType modifiers = 0;
+                string label = shortcut != "" && Gtk.accelerator_parse (shortcut, out key, out modifiers) ?
+                    Gtk.accelerator_get_label (key, modifiers) : "Disabled";
+                button.child = new Gtk.Label (action == recording ? "Press shortcut…" : label);
             }
         }
         public bool handle_key (uint key, Gdk.ModifierType state) {

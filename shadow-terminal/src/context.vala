@@ -43,7 +43,7 @@ namespace Shadow {
                     var block = yield process.get_stdout_pipe ().read_bytes_async (4096, Priority.LOW, cancellable);
                     if (block.get_size () == 0) break;
                     if (bytes.len + block.get_size () > 65536) throw new IOError.NO_SPACE ("Repository status exceeds the display limit");
-                    bytes.append (block.get_data ());
+                    VCom.ByteBuffer.append (bytes, block);
                 }
                 yield process.wait_async (cancellable);
                 if (process.get_successful ()) {

@@ -1,4 +1,7 @@
 namespace Shadow {
+    [CCode (cname = "shadow_xml_node_name", cheader_filename = "xml-native.h")]
+    private extern unowned string xml_node_name (Xml.Node* node);
+
     public class TerminalColors : Object {
         public const string[] KEYS = {"ansi-0", "ansi-1", "ansi-2", "ansi-3", "ansi-4", "ansi-5", "ansi-6", "ansi-7",
             "ansi-8", "ansi-9", "ansi-10", "ansi-11", "ansi-12", "ansi-13", "ansi-14", "ansi-15",
@@ -53,11 +56,11 @@ namespace Shadow {
             return node;
         }
         private static HashTable<string, string> dictionary (Xml.Node* node) throws Error {
-            if (node == null || (string) node->name != "dict") throw new IOError.INVALID_DATA ("Expected an iTerm2 color dictionary");
+            if (node == null || xml_node_name (node) != "dict") throw new IOError.INVALID_DATA ("Expected an iTerm2 color dictionary");
             var result = new HashTable<string, string> (str_hash, str_equal);
             for (var key = element (node->children); key != null;) {
                 var value = element (key->next);
-                if ((string) key->name != "key" || value == null) throw new IOError.INVALID_DATA ("Invalid iTerm2 dictionary");
+                if (xml_node_name (key) != "key" || value == null) throw new IOError.INVALID_DATA ("Invalid iTerm2 dictionary");
                 string name = key->get_content ();
                 if (result.contains (name)) throw new IOError.INVALID_DATA ("Duplicate iTerm2 key: " + name);
                 result.insert (name, value->get_content ());
@@ -89,7 +92,7 @@ namespace Shadow {
             if (doc == null) throw new IOError.INVALID_DATA ("Could not read the XML iTerm2 preset");
             try {
                 var root = doc->get_root_element ();
-                if (root == null || (string) root->name != "plist") throw new IOError.INVALID_DATA ("Expected an XML iTerm2 plist");
+                if (root == null || xml_node_name (root) != "plist") throw new IOError.INVALID_DATA ("Expected an XML iTerm2 plist");
                 var dict = element (root->children);
                 dictionary (dict);
                 if (element (dict->next) != null) throw new IOError.INVALID_DATA ("Expected one preset dictionary");

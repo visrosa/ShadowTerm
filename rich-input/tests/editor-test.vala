@@ -61,6 +61,25 @@ private Gtk.ListBox? suggestion_list (Gtk.Widget widget) {
 void main (string[] args) {
     Gtk.init ();
     Test.init (ref args);
+    Test.add_func ("/editor/independent-fonts-after-reparent", () => {
+        var first = new RichInput () {vexpand = true}; var second = new RichInput () {vexpand = true};
+        first.set_editor_font ("Monospace 12"); second.set_editor_font ("Serif 20");
+        first.buffer.text = "first"; second.buffer.text = "second";
+        var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0); box.append (first); box.append (second);
+        var window = new Gtk.Window () {child = box, default_width = 500, default_height = 400}; window.present (); spin (150);
+        int first_size = first.get_pango_context ().get_font_description ().get_size ();
+        int second_size = second.get_pango_context ().get_font_description ().get_size ();
+        assert (first_size > 0 && second_size > first_size);
+        assert (first.get_pango_context ().get_font_description ().get_family () == "Monospace");
+        assert (second.get_pango_context ().get_font_description ().get_family () == "Serif");
+        box.remove (first);
+        var moved = new Gtk.Window () {child = first}; moved.present (); spin (100);
+        first.set_editor_font ("Monospace 15"); spin (50);
+        int changed_size = first.get_pango_context ().get_font_description ().get_size ();
+        assert (changed_size > first_size && changed_size < second_size);
+        assert (second.get_pango_context ().get_font_description ().get_size () == second_size);
+        moved.destroy (); window.destroy ();
+    });
     Test.add_func ("/editor/source-and-undo", () => {
         var editor = new RichInput ();
         string source = "# Olá\ne\u0301 **bold** and `fish`\n終\t'quoted'\n\n";

@@ -32,7 +32,7 @@ namespace Shadow {
                 decorated: false, resizable: true, default_width: 760, default_height: 540);
             this.directory = directory; this.settings = settings;
             add_css_class ("shadow-documentation");
-            Gtk.StyleContext.add_provider_for_display (get_display (), appearance_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            Native.add_css (get_display (), appearance_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
             settings_handler = settings.changed.connect (update_appearance);
             theme_handler = Granite.Settings.get_default ().notify["prefers-color-scheme"].connect (update_appearance);
             geometry = new Geometry ("documentation", 760, 540);
@@ -178,7 +178,7 @@ namespace Shadow {
             cancel_load ();
             if (settings_handler != 0) { settings.disconnect (settings_handler); settings_handler = 0; }
             if (theme_handler != 0) { Granite.Settings.get_default ().disconnect (theme_handler); theme_handler = 0; }
-            Gtk.StyleContext.remove_provider_for_display (get_display (), appearance_css);
+            Native.remove_css (get_display (), appearance_css);
             if (blur_idle != 0) { Source.remove (blur_idle); blur_idle = 0; }
             if (active_handler != 0) { application.disconnect (active_handler); active_handler = 0; }
         }

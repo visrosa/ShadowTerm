@@ -555,7 +555,7 @@ namespace Shadow {
                     while (data.len <= 262144) {
                         var bytes = yield stream.read_bytes_async (16384, Priority.DEFAULT, import_cancel);
                         if (bytes.get_size () == 0) break;
-                        data.append (bytes.get_data ());
+                        VCom.ByteBuffer.append (data, bytes);
                     }
                 } finally { try { stream.close (null); } catch (Error error) {} }
                 if (import_cancel.is_cancelled () || generation != import_generation) return;

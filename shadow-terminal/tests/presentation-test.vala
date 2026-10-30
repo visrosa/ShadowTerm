@@ -131,6 +131,69 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/pane-extraction-fixture", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "extraction", "--cwd", "/tmp"});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            string source = "TITLE\r\n  child 日本語 e\u0301\r\nprogress 000\rprogress 100\r\n";
+            VCom.TerminalBytes.feed (session.terminal, (char[]) source.data); settle ();
+            string snapshot = session.terminal.get_text_format (Vte.Format.TEXT) ?? "";
+            assert (snapshot.contains ("TITLE\n  child 日本語 e\u0301\nprogress 100"));
+            assert (!snapshot.contains ("progress 000") && !snapshot.contains ("\r"));
+            size_t bytes;
+            string row = session.terminal.get_text_range_format (Vte.Format.TEXT, 1, 0, 1, session.terminal.get_column_count (), out bytes) ?? "";
+            assert (row.contains ("child 日本語 e\u0301") && bytes == row.length);
+            // An alternate screen is a separate live grid, not a command scope.
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[?1049hALT\r\n".data); settle ();
+            assert ((session.terminal.get_text_format (Vte.Format.TEXT) ?? "").contains ("ALT"));
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[?1049l".data); settle ();
+            assert (session.terminal.get_text_format (Vte.Format.TEXT) == snapshot);
+            window.set_default_size (420, 360); settle ();
+            assert ((session.terminal.get_text_format (Vte.Format.TEXT) ?? "").contains ("child 日本語"));
+            assert (source.contains ("progress 000\r") && find_editor (session).source () == "");
+            window.close_workspace (); settle ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
+    Test.add_func ("/presentation/taskline-persistent-consumer", () => {
+        string? binary = Environment.get_variable ("SHADOWTERM_TASKLINE_FIXTURE");
+        if (binary == null) { Test.skip ("Set SHADOWTERM_TASKLINE_FIXTURE to a complete tasklineUI binary"); return; }
+        try {
+            string directory = Path.build_filename (Environment.get_user_data_dir (), "taskline-fixture");
+            DirUtils.create_with_parents (directory, 0700);
+            string db = Path.build_filename (directory, "taskchampion.sqlite3");
+            string fixture = "import sqlite3,json,sys\nc=sqlite3.connect(sys.argv[1])\nc.executescript('CREATE TABLE tasks(uuid TEXT, data TEXT); CREATE TABLE working_set(id INTEGER, uuid TEXT)')\nfor i in range(1,41):\n u='fixture-'+str(i); c.execute('INSERT INTO working_set VALUES(?,?)',(i,u)); c.execute('INSERT INTO tasks VALUES(?,?)',(u,json.dumps({'status':'pending','project':'Fixture','description':'Synthetic task '+str(i)})))\nc.commit()";
+            Process.spawn_sync (null, {"python3", "-c", fixture, db}, null, SpawnFlags.SEARCH_PATH, null);
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "taskline", "--input", "terminal", "--cwd", directory, "--", binary});
+            var window = new Shadow.WorkspaceWindow (host, request);
+            string[] env = Environ.set_variable (Environ.get (), "TASKDATA", directory, true);
+            var session = new Shadow.TerminalSession (host, window, request, env);
+            window.add_session (session); window.present_session (session); session.start ();
+            for (int i = 0; i < 30 && !(session.terminal.get_text_format (Vte.Format.TEXT) ?? "").contains ("Synthetic task"); i++) settle ();
+            string text = session.terminal.get_text_format (Vte.Format.TEXT) ?? "";
+            assert (session.running && text.contains ("Fixture") && text.contains ("Synthetic task 1") && text.contains (" 1 "));
+            int pid = session.child_pid;
+            VCom.TerminalBytes.feed_child (session.terminal, (char[]) "t".data); settle ();
+            VCom.TerminalBytes.feed_child (session.terminal, (char[]) "unsent-fixture".data); settle ();
+            string draft_screen = session.terminal.get_text_format (Vte.Format.TEXT) ?? "";
+            assert (draft_screen.contains ("unsent-fixture"));
+            window.hide_workspace (); settle ();
+            window.present_session (session); settle ();
+            assert (session.child_pid == pid && session.running);
+            assert (session.terminal.get_text_format (Vte.Format.TEXT) == draft_screen);
+            long columns = session.terminal.get_column_count ();
+            window.set_default_size (420, 360); settle (); settle ();
+            assert (session.terminal.get_column_count () != columns);
+            assert ((session.terminal.get_text_format (Vte.Format.TEXT) ?? "").contains ("unsent-fixture"));
+            window.close_workspace ();
+            for (int i = 0; i < 20 && session.running; i++) settle ();
+            assert (!session.running);
+            FileUtils.remove (db); DirUtils.remove (directory);
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/session-display-titles", () => {
         try {
             var host = test_host ();
@@ -142,37 +205,37 @@ int main (string[] args) {
             var draft = find_editor (first); draft.buffer.text = "unsubmitted 日本語";
             var emulator = first.terminal;
             var token = first.input_session.token;
-            first.terminal.feed ("\x1b]2;Editor 日本語 <b>literal</b>\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;Editor 日本語 <b>literal</b>\x07".data); settle ();
             assert (first.display_title == "Editor 日本語 <b>literal</b>");
             var tab = (Gtk.ToggleButton) find_css (window.titlebar, "workspace-tab").get_first_child ();
             assert (((Gtk.Label) tab.child).label == first.display_title);
             assert (!((Gtk.Label) tab.child).use_markup);
             assert (tab.tooltip_text == first.title + "\n/tmp");
             assert (window.title == first.title);
-            first.terminal.feed ("\x1b]2;\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;\x07".data); settle ();
             assert (first.display_title == "tmp");
-            first.terminal.feed ("\x1b]2;Stale program\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;Stale program\x07".data); settle ();
             first.shell_directory ("/tmp/日本語");
             assert (first.display_title == "日本語" && window.title == "日本語 · title-a");
             first.shell_directory ("/");
             assert (first.display_title == "/");
-            first.terminal.feed ("\x1b]2;New title\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;New title\x07".data); settle ();
             assert (first.display_title == "New title");
             string long_title = string.nfill (300, 'x') + "日本語";
-            first.terminal.feed (("\x1b]2;" + long_title + "\x07").data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) ("\x1b]2;" + long_title + "\x07").data); settle ();
             assert (first.display_title.char_count () == 160 && first.display_title.validate ());
-            first.terminal.feed ("\x1b]2;left\u202eright\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;left\u202eright\x07".data); settle ();
             assert (first.display_title == "leftright");
 
             var second_request = Shadow.Request.parse ({"shadow-term", "--session", "title-b", "--cwd", "/tmp", "--title", "Initial"});
             var second = new Shadow.TerminalSession (host, window, second_request, Environ.get ());
             window.add_session (second); window.present_session (second); settle ();
             assert (second.display_title == "Initial" && window.title == "Initial · title-b");
-            first.terminal.feed ("\x1b]2;Background\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;Background\x07".data); settle ();
             assert (first.display_title == "Background" && window.title == second.title);
             window.move_to_tab (first); window.join_previous_tab (); settle ();
             window.present_session (second);
-            first.terminal.feed ("\x1b]2;Inactive split\x07".data); settle ();
+            VCom.TerminalBytes.feed (first.terminal, (char[]) "\x1b]2;Inactive split\x07".data); settle ();
             assert (window.title == second.title);
             window.present_session (first); settle ();
             assert (window.title == first.title);
@@ -276,7 +339,7 @@ int main (string[] args) {
             window.add_session (session); window.present_session (session); settle ();
             if (!session.style_fonts_available ()) Test.skip ("Private style-font hook unavailable");
             else {
-                session.terminal.feed ("Regular\r\n\x1b[1mBold\x1b[0m\r\n\x1b[3mItalic\x1b[0m\r\n\x1b[1;3mBoth\x1b[0m".data); settle ();
+                VCom.TerminalBytes.feed (session.terminal, (char[]) "Regular\r\n\x1b[1mBold\x1b[0m\r\n\x1b[3mItalic\x1b[0m\r\n\x1b[1;3mBoth\x1b[0m".data); settle ();
                 int width = (int) session.terminal.get_char_width (), height = (int) session.terminal.get_char_height ();
                 var before_fonts = texture (session.terminal, window);
                 host.preferences.set_style_fonts ("DejaVu Sans Mono Bold 12", "Liberation Mono Italic 12", "Liberation Mono Bold Italic 12"); settle ();
@@ -371,10 +434,10 @@ int main (string[] args) {
                 terminal.set_color_foreground ({1, 1, 1, 1}); terminal.set_color_background ({0, 0, 0, 1});
                 foreach (double zoom in new double[] {1, 1.4}) {
                     terminal.font_scale = zoom;
-                    terminal.feed ("\x1b[2J\x1b[H\x1b[?25l".data); settle ();
+                    VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\x1b[?25l".data); settle ();
                     long initial_col, initial_row; terminal.get_cursor_position (out initial_col, out initial_row);
                     var empty = texture (terminal, window);
-                    terminal.feed ("\uf07c".data); settle ();
+                    VCom.TerminalBytes.feed (terminal, (char[]) "\uf07c".data); settle ();
                     var icon = texture (terminal, window);
                     var before = new uint8[empty.get_width () * empty.get_height () * 4];
                     var after = new uint8[icon.get_width () * icon.get_height () * 4];
@@ -569,7 +632,7 @@ int main (string[] args) {
             window.add_session (session); window.present_session (session); settle ();
             session.terminal.grab_focus ();
             session.terminal.set_cursor_blink_mode (Vte.CursorBlinkMode.OFF);
-            session.terminal.feed ("\x1b[2J\x1b[H\x1b[?25h".data); settle ();
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[2J\x1b[H\x1b[?25h".data); settle ();
             var block = texture (session.terminal, window);
             host.preferences.set_cursor_shape ("ibeam"); settle ();
             var ibeam = texture (session.terminal, window);
@@ -589,12 +652,12 @@ int main (string[] args) {
 
             // The getter reports the API default, so compare pixels to verify
             // the effective application override as well.
-            session.terminal.feed ("\x1b[6 q".data); settle ();
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[6 q".data); settle ();
             var application = texture (session.terminal, window);
             assert (same_pixels (application, ibeam));
             host.preferences.set_cursor_shape ("underline"); settle ();
             assert (same_pixels (application, texture (session.terminal, window)));
-            session.terminal.feed ("\x1b[0 q".data);
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[0 q".data);
             session.terminal.set_cursor_blink_mode (Vte.CursorBlinkMode.OFF); settle ();
             assert (same_pixels (underline, texture (session.terminal, window)));
 
@@ -636,7 +699,7 @@ int main (string[] args) {
             var blocks = new StringBuilder ("\x1b[?25l\x1b[2J\x1b[H");
             for (int i = 0; i < 16; i++) blocks.append ("\x1b[48;5;%dm  ".printf (i));
             blocks.append ("\x1b[0m");
-            session.terminal.feed (blocks.str.data); settle ();
+            VCom.TerminalBytes.feed (session.terminal, (char[]) blocks.str.data); settle ();
             for (int i = 0; i < 16; i++) {
                 var before = texture (session.terminal, window);
                 colors.set_color (i, "#123456"); host.preferences.set_colors (colors); settle ();
@@ -644,7 +707,7 @@ int main (string[] args) {
             }
             // Explicit truecolor and the extended indexed cube are independent
             // of the user's 16 ANSI overrides.
-            session.terminal.feed ("\x1b[2J\x1b[H\x1b[48;2;11;22;33m      \x1b[48;5;123m      \x1b[0m".data); settle ();
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[2J\x1b[H\x1b[48;2;11;22;33m      \x1b[48;5;123m      \x1b[0m".data); settle ();
             var direct = texture (session.terminal, window);
             host.preferences.set_colors (new Shadow.TerminalColors ()); settle ();
             assert (same_pixels (direct, texture (session.terminal, window)));
@@ -705,10 +768,10 @@ int main (string[] args) {
             settle ();
             assert (surface.get_mapped ());
             if (Shadow.PRIVATE_VTE) {
-                session.terminal.feed ("\x1b[?1049h".data);
+                VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[?1049h".data);
                 settle ();
                 assert (!surface.get_mapped ());
-                session.terminal.feed ("\x1b[?1049l".data);
+                VCom.TerminalBytes.feed (session.terminal, (char[]) "\x1b[?1049l".data);
                 settle ();
                 assert (surface.get_mapped ());
             }
@@ -717,7 +780,7 @@ int main (string[] args) {
             assert (surface.get_mapped () && editor.source () == "preserved draft");
             editor.buffer.text = "";
             host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, false, "#f6f5f4", "#20242b");
-            session.terminal.feed ("Shadow Term\r\n日本語 résumé.md\r\n\r\nA quieter workspace for commands and their output.\r\n".data);
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "Shadow Term\r\n日本語 résumé.md\r\n\r\nA quieter workspace for commands and their output.\r\n".data);
             settle ();
             double cell_width = session.terminal.get_char_width ();
             double cell_height = session.terminal.get_char_height ();
@@ -773,7 +836,7 @@ int main (string[] args) {
             assert (texture (window, window).save_to_png ("/tmp/shadow-term-ui-narrow.png"));
             var history = new StringBuilder ();
             for (int line = 0; line < 100; line++) history.append_printf ("\r\nHistory line %d", line);
-            session.terminal.feed (history.str.data);
+            VCom.TerminalBytes.feed (session.terminal, (char[]) history.str.data);
             settle ();
             var adjustment = session.terminal.vadjustment;
             adjustment.value = adjustment.upper - adjustment.page_size;
@@ -870,10 +933,10 @@ int main (string[] args) {
             settle ();
             string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", "^Private VTE hooks$"});
             run_private ({"xdotool", "mousemove", "--window", wid, "480", "240"});
-            terminal.feed ("\x1b[2J\x1b[Hdirectory\r\n".data);
+            VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[Hdirectory\r\n".data);
             settle ();
             var plain = texture (terminal, window);
-            terminal.feed ("\x1b[2J\x1b[H\x1b]8;;file:///tmp\x1b\\directory\x1b]8;;\x1b\\\r\n".data);
+            VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[2J\x1b[H\x1b]8;;file:///tmp\x1b\\directory\x1b]8;;\x1b\\\r\n".data);
             settle ();
             var linked = texture (terminal, window);
             assert (same_pixels (plain, linked));
@@ -887,10 +950,10 @@ int main (string[] args) {
             run_private ({"xdotool", "mousemove", "--window", wid, "480", "240"});
             settle ();
             assert (same_pixels (linked, texture (terminal, window)));
-            terminal.feed ("\x1b[?25l".data);
+            VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[?25l".data);
             settle ();
             assert (same_pixels (linked, texture (terminal, window)));
-            terminal.feed ("\x1b[?25h".data);
+            VCom.TerminalBytes.feed (terminal, (char[]) "\x1b[?25h".data);
             terminal.remove_css_class ("shadow-composer-cursor");
             terminal.queue_draw ();
             settle ();
