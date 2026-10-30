@@ -53,6 +53,8 @@ namespace Shadow {
         private Gtk.SearchEntry search_entry;
         private Gtk.DropDown search_target;
         private Gtk.Label search_status;
+        private weak Gtk.Widget? search_origin;
+        private bool last_input_was_composer = false;
         private Gtk.Window? preferences_window;
         private ulong preferences_handler;
         private string applied_font_signature = "";
@@ -124,7 +126,6 @@ namespace Shadow {
             menu = create_menu ();
             var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
             root.add_css_class ("shadow-pane");
-            root.append (create_search ());
             scroll.add_css_class ("terminal-scroll");
             root.append (terminal_overlay);
             root.append (create_composer ());
@@ -136,7 +137,10 @@ namespace Shadow {
             feedback_bar.add_css_class ("shadow-padding");
             feedback_bar.append (feedback); feedback_bar.append (restart);
             root.append (feedback_bar);
-            append (root);
+            var content = new Gtk.Overlay () {child = root, vexpand = true};
+            content.add_overlay (create_search ());
+            append (content);
+            unmap.connect (() => close_search (false));
             apply_preferences ();
             preferences_handler = host.preferences.changed.connect (apply_preferences);
             if (PRIVATE_VTE) terminal.notify["shadow-alternate-screen"].connect (() => {
@@ -145,7 +149,13 @@ namespace Shadow {
                 update_composer_visibility ();
                 if (is_active) focus_input ();
             });
-            editor.notify["has-focus"].connect (update_terminal_cursor);
+            editor.notify["has-focus"].connect (() => {
+                if (editor.has_focus) last_input_was_composer = true;
+                update_terminal_cursor ();
+            });
+            terminal.notify["has-focus"].connect (() => {
+                if (terminal.has_focus) last_input_was_composer = false;
+            });
 
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
@@ -421,7 +431,7 @@ namespace Shadow {
                 update_composer_visibility ();
                 presentation_dirty = true;
                 sync_presentation ();
-                if (compose_button.active) editor.grab_focus (); else terminal.grab_focus ();
+                focus_input ();
             });
             return composer;
         }
@@ -505,6 +515,10 @@ namespace Shadow {
             // Screen state comes from VTE itself. Ordinary foreground readers
             // can still receive submitted Composer source and Return.
             composer.reveal_child = compose_button.active && (!alternate_screen || alternate_composer_override);
+            if (!composer.reveal_child && search != null) {
+                if (search_origin == editor) search_origin = null;
+                if (search_target.selected == 1) search_target.selected = 0;
+            }
             update_terminal_cursor ();
         }
 
@@ -680,41 +694,81 @@ namespace Shadow {
 
         private Gtk.Revealer create_search () {
             search_entry = new Gtk.SearchEntry () {hexpand = true, placeholder_text = "Find literal text"};
+            search_entry.add_css_class ("session-search-entry");
             search_target = (Gtk.DropDown) Native.drop_down ({"Terminal", "Composer"});
+            search_target.add_css_class ("search-target");
+            search_target.tooltip_text = "Search in Terminal or Composer";
             var previous = new Gtk.Button.from_icon_name ("go-up-symbolic") {tooltip_text = "Previous Match (Shift+Enter)"};
             var next = new Gtk.Button.from_icon_name ("go-down-symbolic") {tooltip_text = "Next Match (Enter)"};
             var close = new Gtk.Button.from_icon_name ("window-close-symbolic") {tooltip_text = "Close Search (Escape)"};
-            search_status = new Gtk.Label ("");
-            var box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
-            box.add_css_class ("shadow-chrome");
-            box.add_css_class ("shadow-padding");
-            box.append (search_target); box.append (search_entry); box.append (search_status);
-            box.append (previous); box.append (next); box.append (close);
-            search = new Gtk.Revealer () {child = box, transition_duration = 0};
+            search_status = new Gtk.Label ("") {hexpand = true, xalign = 0, ellipsize = Pango.EllipsizeMode.END};
+            search_status.add_css_class ("search-status");
+            var navigation = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0);
+            navigation.add_css_class ("linked");
+            navigation.append (previous); navigation.append (next);
+            var controls = new Gtk.FlowBox () {selection_mode = Gtk.SelectionMode.NONE, homogeneous = false,
+                min_children_per_line = 1, max_children_per_line = 3, column_spacing = 6, row_spacing = 4};
+            controls.append (search_target); controls.append (search_status); controls.append (navigation);
+            var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+            row.append (search_entry); row.append (close);
+            var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 4);
+            box.append (row); box.append (controls);
+            var panel = new SearchPanel (box);
+            search = new Gtk.Revealer () {child = panel, transition_duration = 0,
+                halign = Gtk.Align.END, valign = Gtk.Align.START, margin_top = 10, margin_start = 10, margin_end = 10};
             next.clicked.connect (() => find_next (false));
             previous.clicked.connect (() => find_next (true));
-            close.clicked.connect (close_search);
-            search_entry.stop_search.connect (close_search);
+            close.clicked.connect (() => close_search ());
+            search_entry.stop_search.connect (() => close_search ());
+            search_target.notify["selected"].connect (() => {
+                if (search_target.selected == 1 && !composer.reveal_child) search_target.selected = 0;
+                terminal.search_set_regex (null, 0);
+                search_status.label = "";
+            });
+            search_entry.notify["text"].connect (() => {
+                search_status.label = "";
+                if (search_entry.text == "") terminal.search_set_regex (null, 0);
+            });
             var keys = new Gtk.EventControllerKey () {propagation_phase = Gtk.PropagationPhase.CAPTURE};
             keys.key_pressed.connect ((key, code, state) => {
-                if (key == Gdk.Key.Return) { find_next ((state & Gdk.ModifierType.SHIFT_MASK) != 0); return true; }
+                if (key == Gdk.Key.Escape) { close_search (); return true; }
+                if (key == Gdk.Key.Return || key == Gdk.Key.KP_Enter) {
+                    find_next ((state & Gdk.ModifierType.SHIFT_MASK) != 0); return true;
+                }
                 return false;
             });
             search_entry.add_controller (keys);
+            var dismiss = new Gtk.EventControllerKey ();
+            dismiss.key_pressed.connect ((key) => {
+                if (key != Gdk.Key.Escape) return false;
+                close_search (); return true;
+            });
+            search.add_controller (dismiss);
             return search;
         }
 
         private void open_search (bool in_composer) {
             assistance.dismiss ();
-            search_target.selected = in_composer ? 1 : 0;
+            if (!search.reveal_child) {
+                var focused = window.get_focus ();
+                bool from_composer = last_input_was_composer;
+                if (focused != null && (focused == editor || focused.is_ancestor (editor))) from_composer = true;
+                else if (focused == terminal) from_composer = false;
+                search_origin = from_composer && composer.reveal_child ? (Gtk.Widget) editor : (Gtk.Widget) terminal;
+            }
+            search_target.selected = in_composer && composer.reveal_child ? 1 : 0;
             search.reveal_child = true;
             search_entry.grab_focus ();
         }
 
-        private void close_search () {
+        private void close_search (bool restore_focus = true) {
+            if (search == null || !search.reveal_child) return;
+            var origin = search_origin;
+            search_origin = null;
             search.reveal_child = false;
             terminal.search_set_regex (null, 0);
-            if (search_target.selected == 1 && composer.reveal_child) editor.grab_focus ();
+            if (!restore_focus || closing || !is_presented || window.active_session != this) return;
+            if (origin == editor && composer.reveal_child) editor.grab_focus ();
             else terminal.grab_focus ();
         }
 
@@ -726,7 +780,8 @@ namespace Shadow {
             else {
                 try {
                     // VTE takes PCRE2 flags, not GLib.RegexCompileFlags.
-                    var regex = new Vte.Regex.for_search ("(?mi)" + Regex.escape_string (query), -1, (uint32) Vte.REGEX_FLAGS_DEFAULT);
+                    var regex = new Vte.Regex.for_search ("(?i)" + Regex.escape_string (query), -1,
+                        (uint32) Vte.REGEX_FLAGS_DEFAULT | 0x00000400u /* PCRE2_MULTILINE, pcre2.h */);
                     if (terminal.search_get_regex () == null || last_search != query) {
                         terminal.search_set_regex (regex, 0); last_search = query;
                     }
@@ -845,6 +900,10 @@ namespace Shadow {
             terminal.set_color_highlight (host.preferences.system_colors ? null : host.preferences.colors.special (18));
             terminal.set_color_highlight_foreground (host.preferences.system_colors ? null : host.preferences.colors.special (19));
             update_terminal_cursor ();
+            if (search != null) {
+                if (host.preferences.inherit_style) search.child.add_css_class ("inherit-pane-style");
+                else search.child.remove_css_class ("inherit-pane-style");
+            }
             if (compose_box != null) {
                 if (host.preferences.inherit_style) compose_box.add_css_class ("inherit-pane-style");
                 else compose_box.remove_css_class ("inherit-pane-style");
@@ -936,6 +995,8 @@ namespace Shadow {
         }
 
         public void focus_input () {
+            if (closing) return;
+            if (search.reveal_child) { search_entry.grab_focus (); return; }
             if (composer.reveal_child) editor.grab_focus ();
             else terminal.grab_focus ();
         }
@@ -966,6 +1027,7 @@ namespace Shadow {
         public void end_session () {
             if (closing) return;
             closing = true;
+            close_search (false);
             window.session_closing (this);
             assistance.dismiss ();
             context_bar.cancel ();
@@ -1036,6 +1098,17 @@ namespace Shadow {
                 vte-terminal { padding: 10px 14px; }
                 .shadow-chrome { background-color: @theme_bg_color; color: @theme_fg_color; }
                 .shadow-padding { padding: 8px 14px; }
+                .session-search { background-color: %s; color: %s; padding: 8px;
+                    border: 1px solid alpha(currentColor, 0.3); border-radius: 8px;
+                    box-shadow: 0 3px 8px alpha(black, 0.2); }
+                .session-search flowboxchild { padding: 0; }
+                .session-search.inherit-pane-style entry, .session-search.inherit-pane-style button { color: inherit; }
+                .session-search.inherit-pane-style entry { background-image: none;
+                    background-color: alpha(currentColor, 0.08); caret-color: currentColor; }
+                .session-search.inherit-pane-style button { background-image: none; background-color: transparent; }
+                .session-search.inherit-pane-style button:hover { background-color: alpha(currentColor, 0.12); }
+                .session-search.inherit-pane-style button:active { background-color: alpha(currentColor, 0.2); }
+
                 headerbar.shadow-header { background-image: none; background-color: %s; color: %s;
                     box-shadow: none; border: none; }
                 headerbar.shadow-header button.header-action,
@@ -1056,7 +1129,7 @@ namespace Shadow {
                 .shadow-composer.inherit-pane-style { background-color: %s; color: %s; }
                 .shadow-composer.inherit-pane-style textview.composer-input,
                 .shadow-composer.inherit-pane-style textview.composer-input text { color: %s; caret-color: %s; }
-            """.printf (header_background, header_foreground, header_foreground, header_foreground, background, foreground, foreground, foreground));
+            """.printf (header_background, header_foreground, header_background, header_foreground, header_foreground, header_foreground, background, foreground, foreground, foreground));
         }
 
         public TerminalSession shell_window (string session, int pid) throws IOError {

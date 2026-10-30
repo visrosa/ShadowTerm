@@ -734,6 +734,104 @@ int main (string[] args) {
             window.destroy ();
         } catch (Error error) { Test.message (error.message); Test.fail (); }
     });
+    Test.add_func ("/presentation/floating-session-search", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "search-overlay", "--cwd", "/tmp"});
+            request.width = 920; request.height = 650;
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            string wid = run_private ({"xdotool", "search", "--onlyvisible", "--name", " · search-overlay$"});
+            run_private ({"xdotool", "windowfocus", "--sync", wid}); settle ();
+            var editor = find_editor (session);
+            string source = "**literal [a.*]** and 日本語";
+            editor.buffer.text = source;
+            VCom.TerminalBytes.feed (session.terminal, (char[]) "literal [a.*] first\r\nliteral [a.*] second\r\n".data);
+            settle ();
+            int64 columns = session.terminal.get_column_count (), rows = session.terminal.get_row_count ();
+            string contents = session.terminal.get_text_format (Vte.Format.TEXT) ?? "";
+            editor.grab_focus ();
+            session.dispatch_action ("find-terminal"); settle ();
+            var panel = find_css (session, "session-search");
+            var entry = (Gtk.SearchEntry) find_css (session, "session-search-entry");
+            var scope = (Gtk.DropDown) find_css (session, "search-target");
+            var status = (Gtk.Label) find_css (session, "search-status");
+            var revealer = (Gtk.Revealer) panel.get_parent ();
+            assert (revealer.get_parent () is Gtk.Overlay);
+            assert (!((Gtk.Overlay) revealer.get_parent ()).get_measure_overlay (revealer));
+            assert (session.terminal.get_column_count () == columns && session.terminal.get_row_count () == rows);
+            assert (window.get_focus ().is_ancestor (entry));
+            session.focus_input (); assert (window.get_focus ().is_ancestor (entry));
+            var picked = session.pick (30, 160, Gtk.PickFlags.DEFAULT);
+            assert (picked == session.terminal || picked.is_ancestor (session.terminal));
+            entry.text = "[a.*]";
+            run_private ({"xdotool", "key", "Return"}); settle ();
+            assert (status.label == "Match");
+            assert (session.terminal.get_has_selection ());
+            run_private ({"xdotool", "key", "shift+Return"}); settle ();
+            assert (status.label == "Match");
+            entry.text = "absent"; run_private ({"xdotool", "key", "Return"}); settle ();
+            assert (status.label == "No match");
+            scope.selected = 1; entry.text = "**";
+            run_private ({"xdotool", "key", "Return"}); settle ();
+            assert (status.label == "Match" && editor.source () == source);
+            assert (session.terminal.search_get_regex () == null);
+            run_private ({"xdotool", "key", "Escape"}); settle ();
+            assert (!revealer.reveal_child && editor.has_focus);
+            // Restore the initiating input, independently of the search scope.
+            session.terminal.grab_focus (); session.dispatch_action ("find-terminal"); settle ();
+            scope.selected = 1;
+            // Return on a control retains its native activation semantics.
+            var close_search_button = (Gtk.Button) entry.get_parent ().get_last_child ();
+            close_search_button.grab_focus ();
+            run_private ({"xdotool", "key", "Return"}); settle ();
+            assert (!revealer.reveal_child && session.terminal.has_focus);
+            assert (session.terminal.get_column_count () == columns && session.terminal.get_row_count () == rows);
+            editor.grab_focus (); session.dispatch_action ("find-composer"); settle ();
+            session.dispatch_action ("composer"); settle ();
+            assert (scope.selected == 0 && window.get_focus ().is_ancestor (entry));
+            run_private ({"xdotool", "key", "Escape"}); settle ();
+            assert (session.terminal.has_focus);
+            session.dispatch_action ("composer");
+            session.dispatch_action ("find-terminal"); settle ();
+            host.preferences.apply ("Monospace 12", "Monospace 12", 0.5, 10000, true, false, "#ffeecc", "#302010", 0.5);
+            settle ();
+            assert (panel.has_css_class ("inherit-pane-style"));
+            // The panel paints its own boosted alpha, above terminal content.
+            uint8 alpha = background_alpha (panel, window);
+            assert (alpha >= 190 && alpha <= 193);
+            texture (window, window).save_to_png ("/tmp/shadow-term-search-wide.png");
+            host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, false, true);
+            settle (); assert (!panel.has_css_class ("inherit-pane-style"));
+            window.set_default_size (360, 440); settle ();
+            Graphene.Rect bounds = {};
+            assert (panel.compute_bounds (session, out bounds));
+            assert (bounds.origin.x >= 0 && bounds.origin.x + bounds.size.width <= session.get_width ());
+            texture (window, window).save_to_png ("/tmp/shadow-term-search-narrow.png");
+            var gtk_settings = Gtk.Settings.get_default ();
+            string previous_font = gtk_settings.gtk_font_name;
+            gtk_settings.gtk_font_name = "Sans 20";
+            window.set_default_size (620, 550); settle ();
+            assert (panel.compute_bounds (session, out bounds));
+            assert (bounds.origin.x >= 0 && bounds.origin.x + bounds.size.width <= session.get_width ());
+            texture (window, window).save_to_png ("/tmp/shadow-term-search-large.png");
+            gtk_settings.gtk_font_name = previous_font; settle ();
+            assert (editor.source () == source && session.child_pid == 0 && !session.input_session.pending);
+            assert ((session.terminal.get_text_format (Vte.Format.TEXT) ?? "").strip () == contents.strip ());
+            // A different tab must retain focus when the old search unmaps.
+            var other_request = Shadow.Request.parse ({"shadow-term", "--session", "search-other", "--cwd", "/tmp"});
+            var other = new Shadow.TerminalSession (host, window, other_request, Environ.get ());
+            window.add_session (other); window.present_session (other); settle ();
+            assert (!revealer.reveal_child && find_editor (other).has_focus);
+            window.present_session (session); settle ();
+            assert (editor.has_focus);
+            session.dispatch_action ("find-terminal"); settle ();
+            session.end_session (); settle ();
+            assert (!revealer.reveal_child && window.active_session == other && find_editor (other).has_focus);
+            window.close_workspace (); settle ();
+        } catch (Error error) { Test.message (error.message); Test.fail (); }
+    });
     Test.add_func ("/presentation/live-terminal-palette", () => {
         try {
             var host = test_host ();

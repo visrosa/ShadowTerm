@@ -47,7 +47,7 @@ gnome = import('gnome')
 resources = gnome.compile_resources('shadow-resources', 'data/resources.xml', source_dir: 'data', c_name: 'shadow')
 executable('vcom-shell', 'src/shell-helper.c', dependencies: dependency('gio-2.0'),
            install: true, install_dir: helper_dir)
-app_sources = files('src/options.vala', 'src/application.vala', 'src/workspace.vala', 'src/pane-tab.vala', 'src/session-history.vala', 'src/palette.vala',
+app_sources = files('src/options.vala', 'src/application.vala', 'src/search-panel.vala', 'src/workspace.vala', 'src/pane-tab.vala', 'src/session-history.vala', 'src/palette.vala',
                     'src/terminal-context.vala', 'src/word-selection.vapi', 'src/word-selection.c', 'src/placement.c',
                     'src/input-session.vala', 'src/shell-bridge.vala', 'src/preferences.vala', 'src/shortcut-settings.vala', 'src/terminal-colors.vala', 'src/context.vala',
                     'src/content-client.vala', 'src/content-service.vala', 'src/prompt-context.vala', 'src/context-bar.vala', 'src/context-details.vala', 'src/fish-services.vala', 'src/fish-analysis.vala')
