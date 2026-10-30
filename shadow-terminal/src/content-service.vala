@@ -11,12 +11,16 @@ namespace Shadow {
         private ulong active_handler = 0;
         private Geometry geometry;
         private Gtk.Stack documents = new Gtk.Stack ();
-        private Gtk.Box tabs = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {hexpand = true, homogeneous = true};
+        private Gtk.Box tabs = new PaneTabStrip () {homogeneous = true};
         private PaneTab[] tab_views = {};
         private Gtk.CssProvider appearance_css = new Gtk.CssProvider ();
         private ulong settings_handler;
         private ulong theme_handler;
         private bool stopped;
+        private Json.Array? source_specs;
+        private Gtk.Entry source_name = new Gtk.Entry () {placeholder_text = "Tab name"};
+        private Gtk.Entry source_command = new Gtk.Entry () {placeholder_text = "Command and arguments", hexpand = true, width_chars = 38};
+        private Gtk.Popover source_options = new Gtk.Popover ();
 
         private Gtk.SearchEntry search = new Gtk.SearchEntry () {placeholder_text = "Find in document…"};
         private RichInput[] views = {};
@@ -48,6 +52,18 @@ namespace Shadow {
                 vscrollbar_policy = Gtk.PolicyType.NEVER, propagate_natural_width = false};
             var handle = new Gtk.WindowHandle () {child = scroll_tabs, hexpand = true};
             bar.append (handle);
+            var configure = new Gtk.MenuButton () {icon_name = "emblem-system-symbolic", tooltip_text = "Configure documentation source", popover = source_options};
+            var options = new Gtk.Box (Gtk.Orientation.VERTICAL, 6) {margin_start = 12, margin_end = 12, margin_top = 12, margin_bottom = 12};
+            options.append (new Gtk.Label ("Documentation source") {xalign = 0});
+            options.append (source_name); options.append (source_command);
+            source_name.add_css_class ("documentation-source-name");
+            source_command.add_css_class ("documentation-source-command");
+            options.append (new Gtk.Label ("Arguments use quotes; no shell expansion.\nPlaceholders: {query}, {command}, {token}, {subcommand}") {xalign = 0, wrap = true});
+            var apply_source = new Gtk.Button.with_label ("Save Source");
+            apply_source.clicked.connect (save_source); options.append (apply_source);
+            source_options.child = options;
+            source_options.notify["visible"].connect (() => { if (source_options.visible) edit_source (); });
+            bar.append (configure);
             var dismiss = new Gtk.CheckButton.with_label ("Dismiss on focus loss") {active = settings.docs_dismiss};
             dismiss.toggled.connect (() => {
                 try { settings.set_docs_dismiss (dismiss.active); } catch (Error error) { status.label = error.message; }
@@ -61,6 +77,7 @@ namespace Shadow {
             update_appearance ();
             documents.notify["visible-child-name"].connect (() => {
                 for (int i = 0; i < tab_views.length; i++) tab_views[i].selected = documents.visible_child_name == i.to_string ();
+                if (source_options.visible) edit_source ();
                 load_document.begin ();
             });
             search.search_changed.connect (() => {
@@ -175,6 +192,7 @@ namespace Shadow {
                 title = "Documentation · " + context.get_object ().get_string_member ("query");
                 request = ContentService.make_request ("sources"); request.set_string_member ("config", ContentService.configuration ());
                 var specs = (yield ContentService.request (request, directory, cancel)).get_array ();
+                source_specs = specs;
                 cancel.set_error_if_cancelled ();
                 for (uint i = 0; i < specs.get_length (); i++) {
                     var view = new RichInput () {editable = false, cursor_visible = false, source_mode = true, wrap_mode = Gtk.WrapMode.WORD_CHAR};
@@ -192,6 +210,50 @@ namespace Shadow {
             } catch (Error error) { if (!cancel.is_cancelled ()) status.label = error.message; }
         }
 
+        private void edit_source () {
+            if (source_specs == null || documents.visible_child_name == null) return;
+            var spec = source_specs.get_object_element (uint.parse (documents.visible_child_name));
+            source_name.text = spec.get_string_member ("name");
+            var args = spec.get_array_member ("argv");
+            string[] quoted = {};
+            for (uint i = 0; i < args.get_length (); i++) quoted += Shell.quote (args.get_string_element (i));
+            source_command.text = string.joinv (" ", quoted);
+        }
+
+        private void save_source () {
+            if (source_specs == null || documents.visible_child_name == null) return;
+            try {
+                string[] argv;
+                Shell.parse_argv (source_command.text, out argv);
+                string name = source_name.text.strip ();
+                if (name.char_count () < 1 || name.char_count () > 80 || argv.length < 1 || argv.length > 64 || argv[0] == "")
+                    throw new IOError.INVALID_ARGUMENT ("Use a tab name of 1–80 characters and a command of 1–64 arguments");
+                var root = new Json.Node (Json.NodeType.ARRAY); root.set_array (source_specs);
+                var parser = new Json.Parser ();
+                parser.load_from_data (Json.to_string (root, false));
+                var copy = parser.get_root ().get_array ();
+                uint index = uint.parse (documents.visible_child_name);
+                var spec = copy.get_object_element (index);
+                spec.set_string_member ("name", name);
+                var args = new Json.Array (); foreach (string arg in argv) args.add_string_element (arg);
+                spec.set_array_member ("argv", args);
+                var config = new Json.Object (); config.set_array_member ("sources", copy);
+                var node = new Json.Node (Json.NodeType.OBJECT); node.set_object (config);
+                var generator = new Json.Generator (); generator.set_root (node);
+                string data = generator.to_data (null);
+                if (data.length > 128 * 1024)
+                    throw new IOError.INVALID_ARGUMENT ("Documentation configuration exceeds 128 KiB");
+                string path = ContentService.configuration ();
+                DirUtils.create_with_parents (Path.get_dirname (path), 0700);
+                FileUtils.set_contents (path, data);
+                source_specs = copy;
+                tab_views[index].caption = name;
+                loaded[index] = false;
+                source_options.popdown ();
+                load_document.begin ();
+            } catch (Error error) { status.label = error.message; }
+        }
+
         private async void load_document () {
             if (context == null || documents.visible_child_name == null) return;
             int index = int.parse (documents.visible_child_name);
@@ -204,10 +266,13 @@ namespace Shadow {
             try {
                 var request = ContentService.make_request ("document"); request.set_member ("context", context.copy ());
                 request.set_int_member ("index", index); request.set_string_member ("cwd", directory);
+                request.set_boolean_member ("with_title", true);
                 request.set_string_member ("config", ContentService.configuration ());
-                string text = (yield ContentService.request (request, directory, cancel)).get_string ();
+                var page = (yield ContentService.request (request, directory, cancel)).get_object ();
                 if (version != generation || cancel.is_cancelled ()) return;
-                views[index].buffer.text = text; loaded[index] = true; status.label = "";
+                views[index].buffer.text = page.get_string_member ("text"); loaded[index] = true; status.label = "";
+                string caption = page.get_string_member ("title");
+                tab_views[index].caption = caption == "" ? source_specs.get_object_element (index).get_string_member ("name") : caption;
             } catch (Error error) { if (version == generation && !cancel.is_cancelled ()) status.label = error.message; }
         }
     }

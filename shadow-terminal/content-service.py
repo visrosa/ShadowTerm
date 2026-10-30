@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 
 LIMIT = 48 * 1024
 
@@ -108,12 +109,13 @@ def lookup(source, cursor, selection=""):
 
 
 def clean(text):
+    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)", "", text)
     text = re.sub(r".\x08", "", text)
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     return "".join(c for c in text if c in "\n\t" or ord(c) >= 32 and ord(c) != 127)
 
 
-def run(argv, cwd=None, extra_env=None, binary=False):
+def run(argv, cwd=None, extra_env=None, binary=False, with_title=False):
     if not argv or any(not isinstance(a, str) or "\0" in a for a in argv):
         raise ValueError("Provider argv must contain literal strings")
     env = os.environ | {"PAGER": "cat", "MANPAGER": "cat", "MANWIDTH": "100", "TERM": "dumb", "NO_COLOR": "1"}
@@ -150,10 +152,14 @@ def run(argv, cwd=None, extra_env=None, binary=False):
                 if truncated or code:
                     raise ValueError("Context provider failed or exceeded the output limit")
                 return bytes(data)
-            text = clean(bytes(data[:LIMIT]).decode("utf-8", "replace"))
+            raw = bytes(data[:LIMIT]).decode("utf-8", "replace")
+            titles = re.findall(r"\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)", raw)
+            title = "".join(c for c in titles[-1] if not unicodedata.category(c).startswith("C"))[:160] if titles else ""
+            text = clean(raw)
             if code and not truncated:
                 raise ValueError(text.strip() or f"Provider exited {code}")
-            return text + ("\n[Preview truncated]" if truncated else "")
+            text += "\n[Preview truncated]" if truncated else ""
+            return {"text": text, "title": title} if with_title else text
         except subprocess.TimeoutExpired as error:
             raise TimeoutError("Documentation/preview provider timed out") from error
         finally:
@@ -259,7 +265,8 @@ def respond(request):
         context = request["context"]
         query = context["query"]
         if not query or "\0" in query:
-            return "No documentation query at the caret"
+            text = "No documentation query at the caret"
+            return {"text": text, "title": ""} if request.get("with_title") else text
         spec = sources(request.get("config"))[request["index"]]
         queries = [query]
         if not context.get("selection") and context.get("subcommand"):
@@ -279,7 +286,7 @@ def respond(request):
                             extra_env["MANPATH"] = fish_man + ":" + os.environ.get("MANPATH", "")
                     except (OSError, ValueError, TimeoutError):
                         pass
-                return run(argv, request.get("cwd"), extra_env)
+                return run(argv, request.get("cwd"), extra_env, with_title=request.get("with_title", False))
             except (ValueError, FileNotFoundError) as error:
                 failure = error
         raise ValueError(str(failure))

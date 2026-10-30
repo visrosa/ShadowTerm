@@ -154,7 +154,9 @@ Alt+H or Composer Options → Documentation opens a separate movable/resizable d
 
 The compact window has a draggable source strip, edge resize regions, per-source scrolling and Ctrl+F search. Escape or Close dismisses it independently of the command session. **Dismiss on focus loss** is a saved setting, off by default so the window can stay open. Available sources default to man, offline tldr and info; missing tools/pages show errors without suppressing the other sources. The default tldr adapter requires a client supporting `--offline`; configure another cached source if yours differs. Source changes load lazily and cancel obsolete workers. Window size and supported placement are saved; new X11 views start near the invoking window, while Wayland placement follows compositor policy. No source installs, updates or fetches occur automatically. Fish's installed manual directory takes precedence for man queries.
 
-Configure `$XDG_CONFIG_HOME/shadow-term/documentation.json` with ordered sources and literal argument arrays. The placeholders `{query}`, `{command}`, `{token}` and `{subcommand}` substitute inside individual arguments; they are never shell code:
+The source settings button edits the selected tab's name and command. Save Source persists the change and reloads that page; later documentation windows use the saved command. Arguments accept quoting, with no shell expansion, pipes or redirection. A command's last OSC 0/2 title becomes its tab caption, bounded to 160 characters with control/format characters removed; an absent or empty title uses the configured source name. Titles are plain text. Documentation output remains a bounded plain-text document rather than an interactive terminal.
+
+Alternatively, configure `$XDG_CONFIG_HOME/shadow-term/documentation.json` with ordered sources and literal argument arrays. The placeholders `{query}`, `{command}`, `{token}` and `{subcommand}` substitute inside individual arguments; they are never shell code:
 
 ```json
 {"sources": [{"name": "Manual", "argv": ["man", "--", "{query}"]}, {"name": "Info", "argv": ["info", "--output=-", "--", "{query}"]}]}

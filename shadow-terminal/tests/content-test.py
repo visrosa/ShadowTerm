@@ -155,6 +155,17 @@ class ContentTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 content.run([sys.executable, '-c', 'import time; time.sleep(5)'])
 
+    def test_document_titles_and_control_sequences(self):
+        script = 'import sys; sys.stdout.write("\\x1b]2;First\\x07body\\x1b]0;日本語\\u202e <b>literal</b>\\x1b\\\\\\x1b[31m text\\x1b[0m")'
+        page = content.run([sys.executable, '-c', script], with_title=True)
+        self.assertEqual(page, {'text': 'body text', 'title': '日本語 <b>literal</b>'})
+        self.assertEqual(content.clean('before\x1b]2;unfinished'), 'before')
+        self.assertEqual(content.clean('\x1b]8;;https://example.invalid\x1b\\link\x1b]8;;\x1b\\'), 'link')
+        page = content.run([sys.executable, '-c', 'print("\\x1b]2;" + "x"*200 + "\\x07body")'], with_title=True)
+        self.assertEqual(len(page['title']), 160)
+        self.assertEqual(content.respond({'kind': 'document', 'context': {'query': ''}, 'with_title': True}),
+                         {'text': 'No documentation query at the caret', 'title': ''})
+
     def test_fish_export(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
