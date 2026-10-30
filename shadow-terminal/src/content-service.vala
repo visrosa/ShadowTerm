@@ -52,7 +52,8 @@ namespace Shadow {
                 vscrollbar_policy = Gtk.PolicyType.NEVER, propagate_natural_width = false};
             var handle = new Gtk.WindowHandle () {child = scroll_tabs, hexpand = true};
             bar.append (handle);
-            var configure = new Gtk.MenuButton () {icon_name = "emblem-system-symbolic", tooltip_text = "Configure documentation source", popover = source_options};
+            var configure = new Gtk.MenuButton () {icon_name = "emblem-system-symbolic", tooltip_text = "Configure documentation source"};
+            Native.menu_popover (configure, source_options);
             var options = new Gtk.Box (Gtk.Orientation.VERTICAL, 6) {margin_start = 12, margin_end = 12, margin_top = 12, margin_bottom = 12};
             options.append (new Gtk.Label ("Documentation source") {xalign = 0});
             options.append (source_name); options.append (source_command);
