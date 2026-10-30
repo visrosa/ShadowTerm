@@ -1,0 +1,141 @@
+--- a/codegen/valaccodebasemodule.vala
++++ b/codegen/valaccodebasemodule.vala
+@@ -2000,7 +2000,7 @@
+ 						ccode.add_assignment (new CCodeIdentifier ("old_value"), get_call);
+ 						ccode.open_if (new CCodeBinaryExpression (CCodeBinaryOperator.INEQUALITY, new CCodeIdentifier ("old_value"), new CCodeIdentifier ("value")));
+ 					} else if (property_type.compatible (string_type)) {
+-						ccode.add_declaration (get_ccode_name (property_type), new CCodeVariableDeclarator ("old_value"));
++						ccode.add_declaration (get_ccode_name (get_accessor.value_type), new CCodeVariableDeclarator ("old_value"));
+ 						ccode.add_assignment (new CCodeIdentifier ("old_value"), get_call);
+ 						CCodeFunctionCall ccall;
+ 						if (context.profile == Profile.POSIX) {
+--- a/vapi/glib-2.0.vapi
++++ b/vapi/glib-2.0.vapi
+@@ -5236,7 +5236,7 @@
+ 				if (((!) l).data != data) {
+ 					l = ((!) l).next;
+ 				} else {
+-					func (((!) l).data);
++					func ((void*) ((!) l).data);
+ 					delete_link ((!) l);
+ 					break;
+ 				}
+@@ -5257,7 +5257,7 @@
+ 				if (((!) l).data != data) {
+ 					l = ((!) l).next;
+ 				} else {
+-					func (((!) l).data);
++					func ((void*) ((!) l).data);
+ 					delete_link ((!) l);
+ 					l = this;
+ 				}
+@@ -5333,7 +5333,7 @@
+ 				if (((!) l).data != data) {
+ 					l = ((!) l).next;
+ 				} else {
+-					func (((!) l).data);
++					func ((void*) ((!) l).data);
+ 					delete_link ((!) l);
+ 					break;
+ 				}
+@@ -5354,7 +5354,7 @@
+ 				if (((!) l).data != data) {
+ 					l = ((!) l).next;
+ 				} else {
+-					func (((!) l).data);
++					func ((void*) ((!) l).data);
+ 					delete_link ((!) l);
+ 					l = this;
+ 				}
+@@ -5463,7 +5463,7 @@
+ 		public bool remove_full (G data, FreeFunc? func) {
+ 			unowned List<G>? l = head.find (data);
+ 			if (l != null) {
+-				func (((!) l).data);
++				func ((void*) ((!) l).data);
+ 				delete_link ((!) l);
+ 				return true;
+ 			} else {
+@@ -5479,7 +5479,7 @@
+ 			while (l != null) {
+ 				unowned List<G>? next = ((!) l).next;
+ 				if (((!) l).data == data) {
+-					func (((!) l).data);
++					func ((void*) ((!) l).data);
+ 					delete_link ((!) l);
+ 				}
+ 				l = next;
+--- a/tests/objects/property-notify.c-expected
++++ b/tests/objects/property-notify.c-expected
+@@ -159,7 +159,7 @@
+ foo_set_bar (Foo* self,
+              const gchar* value)
+ {
+-	gchar* old_value;
++	const gchar* old_value;
+ 	g_return_if_fail (IS_FOO (self));
+ 	old_value = foo_get_bar (self);
+ 	if (g_strcmp0 (value, old_value) != 0) {
+@@ -186,7 +186,7 @@
+ foo_set_manam (Foo* self,
+                const gchar* value)
+ {
+-	gchar* old_value;
++	const gchar* old_value;
+ 	g_return_if_fail (IS_FOO (self));
+ 	old_value = foo_get_manam (self);
+ 	if (g_strcmp0 (value, old_value) != 0) {
+--- a/vala/valacodecontext.vala
++++ b/vala/valacodecontext.vala
+@@ -26,6 +26,9 @@
+  * The root of the code tree.
+  */
+ public class Vala.CodeContext {
++	[CCode (cname = "vala_system_data_dirs_copy", cheader_filename = "vala-system-dirs.h", array_length = false, array_null_terminated = true)]
++	private static extern string[] system_data_dirs_copy ();
++
+ 	/**
+ 	 * Enable run-time checks for programming errors.
+ 	 */
+@@ -718,7 +721,7 @@
+ 		}
+ 
+ 		// Search $XDG_DATA_DIRS
+-		foreach (unowned string dir in Environment.get_system_data_dirs ()) {
++		foreach (unowned string dir in system_data_dirs_copy ()) {
+ 			path = Path.build_path ("/", dir, GIR_SUFFIX, girname);
+ 			if (FileUtils.test (path, FileTest.EXISTS | FileTest.IS_REGULAR)) {
+ 				return path;
+@@ -783,7 +786,7 @@
+ 		}
+ 
+ 		if (data_dir != null) {
+-			foreach (unowned string dir in Environment.get_system_data_dirs ()) {
++			foreach (unowned string dir in system_data_dirs_copy ()) {
+ 				filename = Path.build_path ("/", dir, data_dir, basename);
+ 				if (FileUtils.test (filename, FileTest.EXISTS)) {
+ 					return filename;
+@@ -792,7 +795,7 @@
+ 		}
+ 
+ 		if (versioned_data_dir != null) {
+-			foreach (unowned string dir in Environment.get_system_data_dirs ()) {
++			foreach (unowned string dir in system_data_dirs_copy ()) {
+ 				filename = Path.build_path ("/", dir, versioned_data_dir, basename);
+ 				if (FileUtils.test (filename, FileTest.EXISTS)) {
+ 					return filename;
+--- /dev/null
++++ b/vala/vala-system-dirs.h
+@@ -0,0 +1,12 @@
++/* Keep GLib's immutable directory vector borrowed; own only the copy. */
++#pragma once
++#include <glib.h>
++
++static inline gchar **vala_system_data_dirs_copy(void) {
++    const gchar * const *directories = g_get_system_data_dirs();
++    gsize length = 0;
++    while (directories[length]) length++;
++    gchar **copy = g_new0(gchar *, length + 1);
++    for (gsize i = 0; i < length; i++) copy[i] = g_strdup(directories[i]);
++    return copy;
++}

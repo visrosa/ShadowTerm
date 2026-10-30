@@ -32,7 +32,24 @@ A clean GCC 16.2.1/Vala 0.56.19 build at `de9f2ae` emitted 1,070 C warnings and 
 
 `rich-input/src/terminal-bytes.vapi` retains VTE's counted `char` byte contract, including embedded NUL data. `src/xml-native.h` converts libxml's immutable unsigned UTF-8 node names at the C boundary. The shared `byte-buffer.h` appends immutable GBytes without introducing a mutable intermediate. Composer font CSS uses a unique per-editor selector registered before initial layout and released on unrealize/dispose; fonts remain independent across reparenting. Namespace-level declarations retain the supported display-provider APIs without inheriting the deprecated Vala `StyleContext` container marker. Shortcut controls use native accelerator labels in ordinary GTK labels.
 
-There are still many warnings: 927 of the 1,008 C diagnostics concern generated unused declarations. The 59 property-setter qualifier diagnostics assign a borrowed getter result to a mutable `old_value` temporary for comparison; two more originate in the generated generic list-removal helper. Correcting these requires a Vala generator/binding remedy. Do not rewrite application properties or object ownership merely to avoid generator output. GTK padding and X11 placement remain compatibility paths under the supported toolkit baseline; their diagnostics stay visible. A warning-free application build is not claimed.
+The remaining qualifier warnings originate in the generator and core bindings, rather than application storage. The [private Vala correction](../../tools/toolchain/README.md) uses the actual getter return type for property comparisons and corrects all six GLib List/SList/Queue removal helpers. Its regression checks borrowed/owned getters, notification count, object identity and reference lifetimes. The existing Vala property, owned-getter, generic-property and async tests also pass with the updated notification expectation. Generated application C is not edited and diagnostic classes are not disabled.
+
+The helper builds a private compiler and binding set; select both through its wrapper when configuring a fresh Meson build. The ShadowTerm Portage package's default `private-vala` flag selects the separately packaged `dev-lang/vala-shadowterm:0.56` toolchain. It adds qualifier mismatches to the pointer error gates without replacing system Vala. Disabling that flag restores the system compiler and its original qualifier warnings. Unused generator declarations and GTK padding/X11 compatibility paths remain visible; a warning-free build is not claimed.
+
+## Private toolchain comparison
+
+Clean debug builds of the same final application/test roster with GCC 16.2.1 and warning level 1 emit 1,012 C warnings with system Vala 0.56.19 and 951 with the private correction. This roster includes expanded icon fixtures, so its unused totals differ from the earlier 1,008-warning inventory. Both builds promote pointer/sign mismatches to errors; the private build also promotes qualifier mismatches. Neither disables a diagnostic class.
+
+| Diagnostic                 | System compiler | Private compiler |
+| -------------------------- | --------------- | ---------------- |
+| Unused but set variable     | 716             | 716              |
+| Unused variable             | 202             | 202              |
+| Unused function             | 13              | 13               |
+| Discarded qualifiers        | 61              | 0                |
+| Deprecated C declarations   | 20              | 20               |
+| Pointer/sign mismatches     | 0               | 0                |
+
+The 931 unused emissions require generator work beyond the constness correction. The 20 C toolkit deprecations and four Vala deprecation diagnostics retain the supported padding and X11 behavior. The private compiler package itself has separate bootstrap diagnostics; its pointer gates and ownership regressions cover the GLib directory-vector adapter as well as generated application code. Package builds use their own optimization and target roster, so their totals must be reported separately.
 
 Generated examples include `_tmpN__length1`, `_array_size_`, unused property tables and async finish wrappers for fire-and-forget operations. Removing application variables does not remove these declarations. Generated C is not edited and diagnostics are not disabled. Their presence alone does not establish an application runtime failure.
 
