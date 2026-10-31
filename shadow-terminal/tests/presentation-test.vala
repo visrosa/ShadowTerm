@@ -165,6 +165,12 @@ int main (string[] args) {
             var body = find_css (window.child, "pane-liner");
             var strip = (Shadow.PaneTabStrip) find_css (window.titlebar, "pane-tab-strip");
             assert (body is Shadow.PaneBody && !strip.draw_liner);
+            var create = (Gtk.Button) find_css (strip, "new-tab-action");
+            var divider = find_css (strip, "new-tab-divider");
+            assert (!divider.focusable && !divider.can_target && ((Gtk.Accessible) divider).get_accessible_role () == Gtk.AccessibleRole.PRESENTATION);
+            host.preferences.set_shortcut ("new-tab", "<Control><Shift>t");
+            assert (create.tooltip_text == "New Tab (" + host.preferences.shortcut_label ("new-tab") + ")");
+            host.preferences.reset_shortcut ("new-tab");
             for (int pass = 0; pass < 4; pass++) {
                 host.preferences.apply ("Monospace 12", "Monospace 12", pass == 0 ? 0.25 : pass == 1 ? 0.75 : 1,
                     10000, pass != 3, false, "#ffeecc", "#102030", 0.5);
@@ -173,6 +179,15 @@ int main (string[] args) {
                 Graphene.Rect frame = {}, bar = {};
                 assert (body.compute_bounds (window, out frame));
                 assert (strip.compute_bounds (window, out bar));
+                Graphene.Rect button = {}, separator = {}, viewport = {};
+                assert (create.compute_bounds (window, out button) && divider.compute_bounds (window, out separator));
+                assert (strip.get_last_child ().compute_bounds (window, out viewport));
+                assert (separator.origin.x >= button.origin.x + button.size.width + 6);
+                assert (viewport.origin.x >= separator.origin.x + separator.size.width + 6);
+                assert (separator.size.width == 1 && separator.size.height > 0 && separator.size.height < bar.size.height);
+                var decoration = texture (divider, window);
+                assert (alpha_at (decoration, 0, decoration.get_height () / 2) >= 50);
+                assert (alpha_at (decoration, 0, decoration.get_height () / 2) <= 52);
                 var image = texture (window, window);
                 int left = (int) frame.origin.x, right = left + (int) frame.size.width - 1;
                 int bottom = (int) (frame.origin.y + frame.size.height) - 1;

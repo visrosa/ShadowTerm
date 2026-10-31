@@ -123,6 +123,8 @@ namespace Shadow {
             string new_tab_key = host.preferences.shortcut_label ("new-tab");
             create.tooltip_text = "New Tab" + (new_tab_key == "" ? "" : " (" + new_tab_key + ")");
             create.add_css_class ("header-action");
+            create.add_css_class ("new-tab-action");
+            create.update_property (Gtk.AccessibleProperty.LABEL, "New Tab", -1);
             preferences_handler = host.preferences.changed.connect (() => {
                 string binding = host.preferences.shortcut_label ("new-tab");
                 create.tooltip_text = "New Tab" + (binding == "" ? "" : " (" + binding + ")");
@@ -138,7 +140,11 @@ namespace Shadow {
                 propagate_natural_width = false};
             strip = new PaneTabStrip () {draw_liner = false};
             strip.margin_start = 6; strip.margin_end = 6;
-            strip.append (create); strip.append (tab_scroll);
+            var divider = new Gtk.Box (Gtk.Orientation.VERTICAL, 0) {
+                valign = Gtk.Align.CENTER, can_target = false, accessible_role = Gtk.AccessibleRole.PRESENTATION
+            };
+            divider.add_css_class ("new-tab-divider");
+            strip.append (create); strip.append (divider); strip.append (tab_scroll);
             header.title_widget = strip;
             header.pack_end (menus);
             titlebar = header;

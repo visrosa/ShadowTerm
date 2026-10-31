@@ -1119,6 +1119,8 @@ namespace Shadow {
                 .workspace-tab { border-radius: 0; background: transparent; }
                 .workspace-tab.selected { background: transparent; }
                 .pane-tab-strip { padding: 0 12px; }
+                .new-tab-divider { min-width: 1px; min-height: 1em; margin: 0 6px;
+                    background-color: alpha(currentColor, 0.2); }
                 .pane-liner { padding: 0 1px 1px; margin: 0 6px 6px; }
                 .workspace-tab > button { color: inherit; padding: 4px 8px; min-width: 0; }
                 .workspace-tab > button:checked { background: transparent; box-shadow: none; }
