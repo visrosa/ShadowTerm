@@ -14,6 +14,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = Path(os.environ.get("SHADOW_TERM_TEST_BUILD", ROOT / "build")).resolve()
+# Natural-size and repaint matrices render each case across separate frames.
+PRESENTATION_TIMEOUT = 120
 BINARY = BUILD / "shadow-term"
 
 
@@ -84,7 +86,7 @@ def worker(tmp):
     try:
         subprocess.run([str(BUILD / "editor-test")], env=env, check=True, timeout=5)
         subprocess.run([str(BUILD / "appearance-test")], env=env, check=True, timeout=5)
-        subprocess.run([str(BUILD / "presentation-test")], env=env, check=True, timeout=45)
+        subprocess.run([str(BUILD / "presentation-test")], env=env, check=True, timeout=PRESENTATION_TIMEOUT)
         launch("--input", "terminal", "--cwd", str(tmp), "--size", "900x620")
         wait_for(lambda: window("default"), "initial terminal window")
         pid = wait_for(lambda: sessions().get("default", (None, 0))[1], "default shell PID")
@@ -277,7 +279,7 @@ def main():
         if args.presentation:
             subprocess.run([str(BUILD / "editor-test")], check=True, timeout=8)
             subprocess.run([str(BUILD / "appearance-test")], check=True, timeout=5)
-            subprocess.run([str(BUILD / "presentation-test")], check=True, timeout=45)
+            subprocess.run([str(BUILD / "presentation-test")], check=True, timeout=PRESENTATION_TIMEOUT)
         elif args.paste:
             import runpy
             runpy.run_path(str(Path(__file__).with_name("native-paste.py")))["worker"](args.worker)
@@ -335,7 +337,7 @@ def main():
             if args.presentation:
                 arguments.append("--presentation")
             result = subprocess.run(arguments, env=env,
-                                    capture_output=True, text=True, timeout=90)
+                                    capture_output=True, text=True, timeout=90 if args.frontend or args.paste else 180)
             if result.returncode:
                 app_log = "\n".join(p.read_text(errors="replace") for p in (tmp / "app.log", tmp / "frontend.log", tmp / "paste.log") if p.exists())
                 raise AssertionError(result.stdout + result.stderr + "\n" + app_log)

@@ -9,40 +9,48 @@
                                  for (double j = 1.0 / 6.0; j < columns; j += 0.5) {
                                          m_draw.fill_rectangle(
                                                                   xl + j * column_width,
-@@ -9607,6 +9607,32 @@
+@@ -9607,6 +9607,40 @@
                          items[item_count].c = bidirow->vis_get_shaped_char(vcol, c);
                          items[item_count].columns = j - lcol;
                          items[item_count].x = (vcol - (bidirow->vis_is_rtl(vcol) ? items[item_count].columns - 1 : 0)) * column_width;
 +#if VTE_GTK == 4
-+                        // GTK4 invalidates the whole widget, so a space becoming
-+                        // text or changing selection/cursor also repaints its icon.
-+                        // Restrict borrowing to plain, equally styled LTR cells.
-+                        auto const base = _vte_unistr_get_base(c);
-+                        auto const private_use = c == base &&
-+                                ((base >= 0xe000 && base <= 0xf8ff) ||
-+                                 (base >= 0xf0000 && base <= 0xffffd) ||
-+                                 (base >= 0x100000 && base <= 0x10fffd));
-+                        auto const next = _vte_row_data_get(row_data, j);
++                        // GTK4 invalidates the whole widget, so edits or state
++                        // changes in any borrowed cell repaint the symbol too.
++                        vte::view::DrawingContext::SymbolMetrics metrics;
 +                        auto const current = _vte_row_data_get(row_data, lcol);
-+                        if (private_use && !(base >= 0xe0a0 && base <= 0xe0d7) &&
-+                            j == lcol + 1 && j < column_count && next &&
-+                            (next->c == ' ' || next->c == 0x2002) &&
-+                            current->attr.attr == next->attr.attr &&
-+                            current->attr.colors() == next->attr.colors() &&
-+                            !nhyperlink && next->attr.hyperlink_idx == 0 && !nhilite &&
-+                            !(regex_match_has_current() && m_match_span.contains(row, j)) &&
++                        if (j == lcol + 1 && !nhyperlink && !nhilite &&
 +                            current->attr.has_none(VTE_ATTR_UNDERLINE_MASK | VTE_ATTR_STRIKETHROUGH_MASK |
 +                                                   VTE_ATTR_OVERLINE_MASK | VTE_ATTR_BLINK_MASK) &&
-+                            !bidirow->vis_is_rtl(vcol) && bidirow->log2vis(j) == vcol + 1 &&
-+                            selected == cell_is_selected_log(j, row) &&
++                            !bidirow->vis_is_rtl(vcol) &&
 +                            !(m_modes_private.DEC_TEXT_CURSOR() && row == m_screen->cursor.row &&
-+                              (lcol == m_screen->cursor.col || j == m_screen->cursor.col)))
-+                                items[item_count].columns = 2;
++                              lcol == m_screen->cursor.col) &&
++                            m_draw.get_symbol_metrics(c, nattr & attr_mask, metrics)) {
++                                // Borrow only as many compatible printed blanks as
++                                // the actual fallback glyph needs, bounded at four.
++                                auto const wanted = std::min(4, int(std::ceil((metrics.right - metrics.left) / column_width)));
++                                auto span = 1;
++                                while (span < wanted && lcol + span < column_count) {
++                                        auto const next_col = lcol + span;
++                                        auto const next = _vte_row_data_get(row_data, next_col);
++                                        if (!next || (next->c != ' ' && next->c != 0x2002) ||
++                                            current->attr.attr != next->attr.attr ||
++                                            current->attr.colors() != next->attr.colors() ||
++                                            next->attr.hyperlink_idx != 0 ||
++                                            (regex_match_has_current() && m_match_span.contains(row, next_col)) ||
++                                            bidirow->log2vis(next_col) != vcol + span ||
++                                            selected != cell_is_selected_log(next_col, row) ||
++                                            (m_modes_private.DEC_TEXT_CURSOR() && row == m_screen->cursor.row &&
++                                             next_col == m_screen->cursor.col))
++                                                break;
++                                        ++span;
++                                }
++                                items[item_count].columns = span;
++                        }
 +#endif
                          items[item_count].y = y;
                          items[item_count].mirror = bidirow->vis_is_rtl(vcol);
                          items[item_count].box_mirror = !!(row_data->attr.bidi_flags & VTE_BIDI_FLAG_BOX_MIRROR);
-@@ -9683,6 +9709,9 @@
+@@ -9683,6 +9717,9 @@
  void
  Terminal::paint_cursor()
  {
@@ -52,7 +60,7 @@
          vte::view::DrawingContext::TextRequest item;
          vte::grid::row_t drow;
          vte::grid::column_t lcol, vcol;
-@@ -10723,6 +10752,8 @@
+@@ -10723,6 +10760,8 @@
  	/* Clear the scrollback buffers and reset the cursors. Switch to normal screen. */
  	if (clear_history) {
                  m_screen = &m_normal_screen;
@@ -145,40 +153,93 @@
  		_vte_debug_print(vte::debug::category::DRAW,
                                   "Rejecting italic bold font (ratio {}%)",
                                   ratio);
+@@ -188,6 +206,45 @@
+         right = l + w;
+ }
+ 
++#if VTE_GTK == 4
++bool
++DrawingContext::get_symbol_metrics(vteunistr c, uint32_t attr, SymbolMetrics& metrics)
++{
++        auto const base = _vte_unistr_get_base(c);
++        // Single text symbols only. Keep clusters, emoji, CJK, letters and
++        // joined Powerline separators on their ordinary rendering paths.
++        if (c != base || (base >= 0xe0a0 && base <= 0xe0d7))
++                return false;
++        auto const private_use = (base >= 0xe000 && base <= 0xf8ff) ||
++                                 (base >= 0xf0000 && base <= 0xffffd) ||
++                                 (base >= 0x100000 && base <= 0x10fffd);
++        auto const text_symbol = base == 0x2026 ||
++                                 (base >= 0x2190 && base <= 0x2199) ||
++                                 (base >= 0x231c && base <= 0x231f) ||
++                                 base == 0x2699 ||
++                                 (base >= 0x27f0 && base <= 0x27ff) ||
++                                 base == 0x2e3a || base == 0x2e3b;
++        if (!private_use && !text_symbol)
++                return false;
++        auto const info = m_fonts[attr_to_style(attr)]->get_unistr_info(c);
++        if (info->has_unknown_chars ||
++            info->coverage() != FontInfo::UnistrInfo::Coverage::USE_PANGO_GLYPH_STRING)
++                return false;
++        auto const& glyphs = info->m_ufi.using_pango_glyph_string;
++        if (!glyphs.font || !glyphs.glyph_string->num_glyphs)
++                return false;
++        PangoRectangle ink;
++        pango_glyph_string_extents(glyphs.glyph_string, glyphs.font, &ink, nullptr);
++        // The advance can include large side bearings in a fallback font.
++        // Fit visible ink, rather than shrinking it to preserve unused spacing.
++        metrics = {ink.x / double(PANGO_SCALE),
++                   (ink.x + ink.width) / double(PANGO_SCALE),
++                   ink.y / double(PANGO_SCALE),
++                   (ink.y + ink.height) / double(PANGO_SCALE), private_use};
++        return metrics.right > metrics.left;
++}
++#endif
++
+ void
+ DrawingContext::draw_line(int x,
+                           int y,
+--- a/src/drawing-context.hh
++++ b/src/drawing-context.hh
+@@ -249,6 +249,13 @@
+                             uint32_t attr,
+                             int& left,
+                             int& right);
++#if VTE_GTK == 4
++        struct SymbolMetrics {
++                double left, right, top, bottom;
++                bool centered;
++        };
++        bool get_symbol_metrics(vteunistr c, uint32_t attr, SymbolMetrics& metrics);
++#endif
+         virtual void draw_text(TextRequest* requests,
+                                gsize n_requests,
+                                uint32_t attr,
 --- a/src/drawing-gsk.cc
 +++ b/src/drawing-gsk.cc
-@@ -209,6 +209,43 @@
-                         auto const from_string = ufi->using_pango_glyph_string.glyph_string;
+@@ -210,6 +210,35 @@
                          if (from_string->num_glyphs == 0)
                                  break;
-+
-+                        // Paint spans may borrow one compatible following space; the
-+                        // terminal grid and source retain their original allocation.
-+                        auto const base = _vte_unistr_get_base(c);
-+                        auto const private_use = c == base &&
-+                                ((base >= 0xe000 && base <= 0xf8ff) ||
-+                                 (base >= 0xf0000 && base <= 0xffffd) ||
-+                                 (base >= 0x100000 && base <= 0x10fffd));
-+                        if (private_use && !(base >= 0xe0a0 && base <= 0xe0d7)) {
-+                                PangoRectangle ink;
-+                                pango_glyph_string_extents(from_string, node_font, &ink, nullptr);
-+                                auto const left = std::min(0.0, ink.x / double(PANGO_SCALE));
-+                                auto const right = std::max(double(uinfo->width),
-+                                        (ink.x + ink.width) / double(PANGO_SCALE));
-+                                auto const available = (right - left > cell_width() ? requests[i].columns : 1) * cell_width();
-+                                auto const top = ink.y / double(PANGO_SCALE);
-+                                auto const bottom = (ink.y + ink.height) / double(PANGO_SCALE);
-+                                auto scale = std::min(1.0, available / (right - left));
-+                                if (top < 0)
-+                                        scale = std::min(scale, (y - requests[i].y) / -top);
-+                                if (bottom > 0)
-+                                        scale = std::min(scale, (requests[i].y + cell_height() - y) / bottom);
+ 
++                        SymbolMetrics metrics;
++                        if (get_symbol_metrics(c, attr, metrics) &&
++                            (metrics.centered || metrics.left < 0 || metrics.right > cell_width() ||
++                             metrics.top < requests[i].y - y ||
++                             metrics.bottom > requests[i].y + cell_height() - y)) {
++                                // Row rendering has already bounded this paint span;
++                                // fitting uses the resolved face's full ink bounds.
++                                auto const available = requests[i].columns * cell_width();
++                                auto scale = std::min(1.0, available / (metrics.right - metrics.left));
++                                if (metrics.top < 0)
++                                        scale = std::min(scale, (y - requests[i].y) / -metrics.top);
++                                if (metrics.bottom > 0)
++                                        scale = std::min(scale, (requests[i].y + cell_height() - y) / metrics.bottom);
 +                                flush_glyph_string(node_font, &rgba);
-+                                auto const offset = GRAPHENE_POINT_INIT(float(-left), 0);
++                                auto const offset = GRAPHENE_POINT_INIT(float(-metrics.left), 0);
 +                                auto node = gsk_text_node_new(node_font, from_string, &rgba, &offset);
 +                                if (node != nullptr) {
 +                                        auto const origin = GRAPHENE_POINT_INIT(
-+                                                float(requests[i].x + (available - (right - left) * scale) / 2), float(y));
++                                                float(requests[i].x + (available - (metrics.right - metrics.left) * scale) / 2), float(y));
 +                                        gtk_snapshot_save(m_snapshot);
 +                                        gtk_snapshot_translate(m_snapshot, &origin);
 +                                        gtk_snapshot_scale(m_snapshot, scale, scale);
@@ -188,6 +249,7 @@
 +                                }
 +                                continue;
 +                        }
- 
++
                          auto to_glyphs = vte_glyphs_grow (&m_glyphs, from_string->num_glyphs);
                          for (int j = 0; j < from_string->num_glyphs; j++) {
+                                 to_glyphs[j] = from_string->glyphs[j];
