@@ -144,7 +144,7 @@ namespace Shadow {
                 valign = Gtk.Align.CENTER, can_target = false, accessible_role = Gtk.AccessibleRole.PRESENTATION
             };
             divider.add_css_class ("new-tab-divider");
-            strip.append (create); strip.append (divider); strip.append (tab_scroll);
+            strip.append_content (create); strip.append_content (divider); strip.append_content (tab_scroll);
             header.title_widget = strip;
             header.pack_end (menus);
             titlebar = header;

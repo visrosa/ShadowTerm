@@ -11,7 +11,7 @@ namespace Shadow {
         private ulong active_handler = 0;
         private Geometry geometry;
         private Gtk.Stack documents = new Gtk.Stack ();
-        private Gtk.Box tabs = new PaneTabStrip () {homogeneous = true};
+        private Gtk.Box tabs = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {homogeneous = true, hexpand = true};
         private PaneTab[] tab_views = {};
         private Gtk.CssProvider appearance_css = new Gtk.CssProvider ();
         private ulong settings_handler;
@@ -50,7 +50,10 @@ namespace Shadow {
             var bar = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
             var scroll_tabs = new Gtk.ScrolledWindow () {child = tabs, hexpand = true, hscrollbar_policy = Gtk.PolicyType.AUTOMATIC,
                 vscrollbar_policy = Gtk.PolicyType.NEVER, propagate_natural_width = false};
-            var handle = new Gtk.WindowHandle () {child = scroll_tabs, hexpand = true};
+            var strip = new PaneTabStrip ();
+            strip.append_content (scroll_tabs);
+            scroll_tabs.hadjustment.value_changed.connect (strip.queue_draw);
+            var handle = new Gtk.WindowHandle () {child = strip, hexpand = true};
             bar.append (handle);
             var configure = new Gtk.MenuButton () {icon_name = "emblem-system-symbolic", tooltip_text = "Configure documentation source"};
             Native.menu_popover (configure, source_options);

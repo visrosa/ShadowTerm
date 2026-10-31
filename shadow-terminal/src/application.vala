@@ -1118,7 +1118,8 @@ namespace Shadow {
                 .split-layout .active-pane { outline: 1px solid alpha(@theme_selected_bg_color, 0.55); outline-offset: -1px; }
                 .workspace-tab { border-radius: 0; background: transparent; }
                 .workspace-tab.selected { background: transparent; }
-                .pane-tab-strip { padding: 0 12px; }
+                .pane-tab-strip { padding: 0 0 0 12px; }
+                .pane-tab-strip:dir(rtl) { padding: 0 12px 0 0; }
                 .new-tab-divider { min-width: 1px; min-height: 1em; margin: 0 6px;
                     background-color: alpha(currentColor, 0.2); }
                 .pane-liner { padding: 0 1px 1px; margin: 0 6px 6px; }

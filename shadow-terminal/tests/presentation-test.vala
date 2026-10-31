@@ -181,7 +181,15 @@ int main (string[] args) {
                 assert (strip.compute_bounds (window, out bar));
                 Graphene.Rect button = {}, separator = {}, viewport = {};
                 assert (create.compute_bounds (window, out button) && divider.compute_bounds (window, out separator));
-                assert (strip.get_last_child ().compute_bounds (window, out viewport));
+                var tail = find_css (strip, "tab-liner-tail");
+                assert (!tail.focusable && !tail.can_target && ((Gtk.Accessible) tail).get_accessible_role () == Gtk.AccessibleRole.PRESENTATION);
+                assert (tail.get_prev_sibling ().compute_bounds (window, out viewport));
+                Graphene.Rect extension = {};
+                assert (tail.compute_bounds (window, out extension));
+                int minimum, natural;
+                tail.measure (Gtk.Orientation.HORIZONTAL, -1, out minimum, out natural, null, null);
+                assert (minimum == 0 && natural > 0 && extension.size.width == natural);
+                assert (extension.origin.x == viewport.origin.x + viewport.size.width);
                 assert (separator.origin.x >= button.origin.x + button.size.width + 6);
                 assert (viewport.origin.x >= separator.origin.x + separator.size.width + 6);
                 assert (separator.size.width == 1 && separator.size.height > 0 && separator.size.height < bar.size.height);
@@ -225,7 +233,7 @@ int main (string[] args) {
             }
             host.preferences.apply ("Monospace 12", "Monospace 12", 0.25, 10000, true, false, "#ffeecc", "#102030", 0.5);
             window.present_session (session); settle ();
-            var scroll = (Gtk.ScrolledWindow) strip.get_last_child ();
+            var scroll = (Gtk.ScrolledWindow) strip.get_last_child ().get_prev_sibling ();
             assert (scroll.hadjustment.upper > scroll.hadjustment.page_size);
             // Scroll the selected tab completely outside the viewport. Its
             // hidden outline must not leave an opening through visible tabs.
@@ -240,7 +248,12 @@ int main (string[] args) {
                 assert (alpha_at (overflow_image, x, baseline) >= 186 && alpha_at (overflow_image, x, baseline) <= 190);
             }
             assert (overflow_image.save_to_png ("/tmp/shadow-term-frame-overflow.png"));
+            Graphene.Rect tail_bounds = {};
+            assert (strip.get_last_child ().compute_bounds (window, out tail_bounds));
+            for (int x = (int) tail_bounds.origin.x + 2; x < tail_bounds.origin.x + tail_bounds.size.width - 2; x++)
+                assert (alpha_at (overflow_image, x, baseline) >= 186 && alpha_at (overflow_image, x, baseline) <= 190);
             window.present_session (extras.last ().data); settle ();
+            assert (texture (window, window).save_to_png ("/tmp/shadow-term-frame-last-tab.png"));
             var split_request = Shadow.Request.parse ({"shadow-term", "--session", "frame-split"});
             var split = new Shadow.TerminalSession (host, window, split_request, Environ.get ());
             window.add_session (split, session); window.present_session (split); settle ();
@@ -249,6 +262,31 @@ int main (string[] args) {
             split.end_session ();
             foreach (var extra in extras) extra.end_session ();
             session.end_session (); window.destroy ();
+            // Exercise the shared strip's live font sizing, logical trailing
+            // edge and zero minimum independently of the window's own minimum.
+            var sizing = new Shadow.PaneTabStrip () {draw_liner = false};
+            var control = new Gtk.Button.with_label ("Keep control");
+            sizing.append_content (control);
+            var sizing_window = new Gtk.Window () {application = host, child = sizing, default_width = 400};
+            sizing_window.present (); settle ();
+            var font_css = new Gtk.CssProvider ();
+            font_css.load_from_string (".tab-liner-tail { font-size: 24px; }");
+            Shadow.Native.add_css (sizing.get_display (), font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+            settle ();
+            var sizing_tail = sizing.get_last_child ();
+            assert (sizing_tail.get_width () == 36);
+            sizing.set_direction (Gtk.TextDirection.RTL); settle ();
+            Graphene.Rect rtl_tail = {}, rtl_control = {};
+            assert (sizing_tail.compute_bounds (sizing, out rtl_tail) && control.compute_bounds (sizing, out rtl_control));
+            assert (rtl_tail.origin.x + rtl_tail.size.width <= rtl_control.origin.x);
+            int control_minimum;
+            control.measure (Gtk.Orientation.HORIZONTAL, -1, out control_minimum, null, null, null);
+            sizing_window.set_default_size (control_minimum + 12 + 18, 80); settle ();
+            assert (sizing_tail.get_width () > 0 && sizing_tail.get_width () < 36);
+            assert (control.compute_bounds (sizing, out rtl_control));
+            assert (rtl_control.size.width >= control_minimum);
+            Shadow.Native.remove_css (sizing.get_display (), font_css);
+            sizing_window.destroy ();
             host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, true); settle ();
         } catch (Error error) { Test.fail_printf ("%s", error.message); }
     });
@@ -633,6 +671,12 @@ int main (string[] args) {
             var source_tab = (Shadow.PaneTab) find_css (docs.child, "workspace-tab");
             assert (source_tab.get_first_child () == source_tab.get_last_child ());
             assert (source_tab.selected);
+            var doc_strip = (Shadow.PaneTabStrip) find_css (docs.child, "pane-tab-strip");
+            var doc_tail = find_css (doc_strip, "tab-liner-tail");
+            int tail_natural;
+            doc_tail.measure (Gtk.Orientation.HORIZONTAL, -1, null, out tail_natural, null, null);
+            assert (doc_tail.get_width () == tail_natural && tail_natural > 0);
+            assert (doc_tail.get_prev_sibling () is Gtk.ScrolledWindow);
             host.preferences.apply ("Monospace 12", "Monospace 14", 0.5, 10000, true, false, "#ddeeff", "#123456");
             settle ();
             Gdk.RGBA expected = {}; expected.parse ("#ddeeff");
@@ -653,6 +697,24 @@ int main (string[] args) {
             assert (third.source () == "task");
             stack.visible_child_name = "0";
             assert (view.source () == "task-list");
+            docs.set_default_size (400, 540); settle ();
+            var doc_scroll = (Gtk.ScrolledWindow) doc_tail.get_prev_sibling ();
+            assert (doc_scroll.hadjustment.upper > doc_scroll.hadjustment.page_size);
+            doc_scroll.hadjustment.value = doc_scroll.hadjustment.upper - doc_scroll.hadjustment.page_size;
+            settle ();
+            Graphene.Rect first_tab = {}, doc_viewport = {}, extension = {};
+            assert (source_tab.compute_bounds (doc_strip, out first_tab) && doc_scroll.compute_bounds (doc_strip, out doc_viewport));
+            assert (doc_tail.compute_bounds (doc_strip, out extension));
+            assert (first_tab.origin.x + first_tab.size.width <= doc_viewport.origin.x);
+            assert (extension.origin.x >= doc_viewport.origin.x + doc_viewport.size.width);
+            var liner_image = texture (doc_strip, docs);
+            int doc_baseline = liner_image.get_height () - 1;
+            int tail_alpha = alpha_at (liner_image, (int) extension.origin.x + 2, doc_baseline);
+            assert (tail_alpha >= 75 && tail_alpha <= 78);
+            for (int x = (int) doc_viewport.origin.x + 3; x < doc_viewport.origin.x + doc_viewport.size.width - 3; x += 17)
+                assert ((alpha_at (liner_image, x, doc_baseline) - tail_alpha).abs () <= 2);
+            assert (texture (docs, docs).save_to_png ("/tmp/shadow-term-documentation-overflow.png"));
+            docs.set_default_size (760, 540); settle ();
             var source_name = (Gtk.Entry) find_css (docs.child, "documentation-source-name");
             var source_command = (Gtk.Entry) find_css (docs.child, "documentation-source-command");
             source_name.text = "Custom source";

@@ -1,11 +1,39 @@
 namespace Shadow {
+    // A zero minimum lets Gtk.Box give up decoration before displacing controls.
+    internal class LinerTail : Gtk.Widget {
+        public LinerTail () {
+            Object (can_target: false, accessible_role: Gtk.AccessibleRole.PRESENTATION);
+            add_css_class ("tab-liner-tail");
+        }
+
+        public override void measure (Gtk.Orientation orientation, int for_size,
+                                      out int minimum, out int natural,
+                                      out int minimum_baseline, out int natural_baseline) {
+            minimum = natural = 0;
+            minimum_baseline = natural_baseline = -1;
+            if (orientation != Gtk.Orientation.HORIZONTAL) return;
+            var context = get_pango_context ();
+            var font = context.get_font_description ();
+            double size = (double) font.get_size () / Pango.SCALE;
+            double resolution = Pango.cairo_context_get_resolution (context);
+            if (!font.get_size_is_absolute ()) size *= (resolution > 0 ? resolution : 96) / 72;
+            natural = (int) (size * 1.5 + 0.5);
+        }
+    }
+
     // The liner belongs to the host strip and leaves the selected tab open to
     // its content, including when the tabs sit inside a scrolling container.
     public class PaneTabStrip : Gtk.Box {
         public bool draw_liner { get; set; default = true; }
+        private LinerTail tail = new LinerTail ();
         public PaneTabStrip () {
             Object (orientation: Gtk.Orientation.HORIZONTAL, spacing: 0, hexpand: true);
             add_css_class ("pane-tab-strip");
+            append (tail);
+        }
+
+        public void append_content (Gtk.Widget child) {
+            insert_child_after (child, tail.get_prev_sibling ());
         }
 
         private PaneTab? active_tab (Gtk.Widget widget) {
@@ -24,10 +52,18 @@ namespace Shadow {
             context.set_source_rgba (color.red, color.green, color.blue, 0.3);
             context.set_line_width (1);
             var active = active_tab (this);
-            Graphene.Rect tab = {};
+            Graphene.Rect tab = {}, viewport = {};
             if (active != null && active.compute_bounds (this, out tab)) {
-                context.move_to (0, get_height () - 0.5); context.line_to (tab.origin.x, get_height () - 0.5);
-                context.move_to (tab.origin.x + tab.size.width, get_height () - 0.5); context.line_to (get_width (), get_height () - 0.5);
+                double start = tab.origin.x, end = tab.origin.x + tab.size.width;
+                for (var parent = active.get_parent (); parent != null && parent != this; parent = parent.get_parent ()) {
+                    if (parent is Gtk.ScrolledWindow && parent.compute_bounds (this, out viewport)) {
+                        start = double.max (start, viewport.origin.x);
+                        end = double.min (end, viewport.origin.x + viewport.size.width);
+                    }
+                }
+                if (end <= start) start = end = 0;
+                context.move_to (0, get_height () - 0.5); context.line_to (start, get_height () - 0.5);
+                context.move_to (end, get_height () - 0.5); context.line_to (get_width (), get_height () - 0.5);
             } else {
                 context.move_to (0, get_height () - 0.5); context.line_to (get_width (), get_height () - 0.5);
             }
