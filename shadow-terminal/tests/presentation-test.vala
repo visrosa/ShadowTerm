@@ -138,6 +138,13 @@ private bool same_pixels (Gdk.Texture first, Gdk.Texture second) {
     return true;
 }
 
+private uint8 alpha_at (Gdk.Texture image, int x, int y) {
+    assert (x >= 0 && x < image.get_width () && y >= 0 && y < image.get_height ());
+    var pixels = new uint8[image.get_width () * image.get_height () * 4];
+    image.download (pixels, image.get_width () * 4);
+    return pixels[(y * image.get_width () + x) * 4 + 3];
+}
+
 int main (string[] args) {
     // This executable opens synthetic windows; only the isolated harness opts in.
     if (Environment.get_variable ("SHADOW_TERM_PRIVATE_TEST") != "1") return 2;
@@ -145,6 +152,91 @@ int main (string[] args) {
     Test.init (ref args);
     // The private bus intentionally has no desktop portal/AccountsService.
     Log.set_always_fatal (LogLevelFlags.LEVEL_ERROR | LogLevelFlags.LEVEL_CRITICAL);
+    Test.add_func ("/presentation/continuous-workspace-frame", () => {
+        try {
+            var host = test_host ();
+            var request = Shadow.Request.parse ({"shadow-term", "--session", "frame-fixture", "--input", "composer"});
+            request.width = 920; request.height = 600;
+            var window = new Shadow.WorkspaceWindow (host, request);
+            var session = new Shadow.TerminalSession (host, window, request, Environ.get ());
+            window.add_session (session); window.present_session (session); settle ();
+            var editor = find_editor (session);
+            editor.buffer.text = "preserved 日本語 draft";
+            var body = find_css (window.child, "pane-liner");
+            var strip = (Shadow.PaneTabStrip) find_css (window.titlebar, "pane-tab-strip");
+            assert (body is Shadow.PaneBody && !strip.draw_liner);
+            for (int pass = 0; pass < 4; pass++) {
+                host.preferences.apply ("Monospace 12", "Monospace 12", pass == 0 ? 0.25 : pass == 1 ? 0.75 : 1,
+                    10000, pass != 3, false, "#ffeecc", "#102030", 0.5);
+                window.set_default_size (pass < 2 ? 920 : 380, 600);
+                settle ();
+                Graphene.Rect frame = {}, bar = {};
+                assert (body.compute_bounds (window, out frame));
+                assert (strip.compute_bounds (window, out bar));
+                var image = texture (window, window);
+                int left = (int) frame.origin.x, right = left + (int) frame.size.width - 1;
+                int bottom = (int) (frame.origin.y + frame.size.height) - 1;
+                int join = (int) (bar.origin.y + bar.size.height) - 1;
+                int start = (int) frame.origin.y;
+                // Border allocation stays transparent beneath the single
+                // stroke; corners clip content instead of leaving square ink.
+                for (int y = start + 12; y < bottom - 12; y += 23) {
+                    assert (alpha_at (image, left, y) >= 75 && alpha_at (image, left, y) <= 78);
+                    assert (alpha_at (image, right, y) >= 75 && alpha_at (image, right, y) <= 78);
+                }
+                assert (alpha_at (image, (left + right) / 2, bottom) >= 75);
+                assert (alpha_at (image, (left + right) / 2, bottom) <= 78);
+                assert (alpha_at (image, left, bottom) == 0 && alpha_at (image, right, bottom) == 0);
+                // The same contour continues above the body into the native
+                // header, composited over its independently boosted opacity.
+                for (int y = join; y < start; y++) {
+                    int underlying = alpha_at (image, left - 2, y);
+                    int expected = (int) (77 + underlying * 0.7);
+                    assert ((alpha_at (image, left, y) - expected).abs () <= 2);
+                }
+                assert (editor.source () == "preserved 日本語 draft");
+                assert (!session.input_session.pending && session.child_pid == 0);
+                assert (image.save_to_png ("/tmp/shadow-term-frame-%d.png".printf (pass)));
+            }
+            int columns = (int) session.terminal.get_column_count (), rows = (int) session.terminal.get_row_count ();
+            session.dispatch_action ("find-terminal"); settle ();
+            assert (session.terminal.get_column_count () == columns && session.terminal.get_row_count () == rows);
+            assert (editor.source () == "preserved 日本語 draft");
+            var extras = new List<Shadow.TerminalSession> ();
+            for (int i = 0; i < 6; i++) {
+                var extra_request = Shadow.Request.parse ({"shadow-term", "--session", "frame-tab-%d".printf (i)});
+                var extra = new Shadow.TerminalSession (host, window, extra_request, Environ.get ());
+                extras.append (extra); window.add_session (extra);
+            }
+            host.preferences.apply ("Monospace 12", "Monospace 12", 0.25, 10000, true, false, "#ffeecc", "#102030", 0.5);
+            window.present_session (session); settle ();
+            var scroll = (Gtk.ScrolledWindow) strip.get_last_child ();
+            assert (scroll.hadjustment.upper > scroll.hadjustment.page_size);
+            // Scroll the selected tab completely outside the viewport. Its
+            // hidden outline must not leave an opening through visible tabs.
+            scroll.hadjustment.value = scroll.hadjustment.upper - scroll.hadjustment.page_size;
+            settle ();
+            Graphene.Rect viewport = {}, bar = {};
+            assert (scroll.compute_bounds (window, out viewport));
+            assert (strip.compute_bounds (window, out bar));
+            var overflow_image = texture (window, window);
+            int baseline = (int) (bar.origin.y + bar.size.height) - 1;
+            for (int x = (int) viewport.origin.x + 3; x < viewport.origin.x + viewport.size.width - 3; x += 17) {
+                assert (alpha_at (overflow_image, x, baseline) >= 186 && alpha_at (overflow_image, x, baseline) <= 190);
+            }
+            assert (overflow_image.save_to_png ("/tmp/shadow-term-frame-overflow.png"));
+            window.present_session (extras.last ().data); settle ();
+            var split_request = Shadow.Request.parse ({"shadow-term", "--session", "frame-split"});
+            var split = new Shadow.TerminalSession (host, window, split_request, Environ.get ());
+            window.add_session (split, session); window.present_session (split); settle ();
+            assert (editor.source () == "preserved 日本語 draft" && session.child_pid == 0 && split.child_pid == 0);
+            assert (texture (window, window).save_to_png ("/tmp/shadow-term-frame-split.png"));
+            split.end_session ();
+            foreach (var extra in extras) extra.end_session ();
+            session.end_session (); window.destroy ();
+            host.preferences.apply ("Monospace 12", "Monospace 12", 1, 10000, true, true); settle ();
+        } catch (Error error) { Test.fail_printf ("%s", error.message); }
+    });
     Test.add_func ("/presentation/pane-extraction-fixture", () => {
         try {
             var host = test_host ();

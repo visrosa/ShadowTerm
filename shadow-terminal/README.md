@@ -84,6 +84,8 @@ The header contains a horizontally scrollable tab strip, + (New Tab) and Termina
 
 Tab captions and the active window title prefer the application’s terminal title, falling back to the current directory basename. Returning to an authenticated fish prompt clears the previous application title; a later terminal title can replace it. Other shells retain the launch-directory fallback unless they send a terminal title. `--title` supplies an initial title. Titles are bounded plain text, split tabs follow their active pane and show a pane count, and tab tooltips retain the full directory and session identity. Session names used by CLI controls remain unchanged.
 
+The selected tab and Pane share a continuous outline with rounded lower corners. Header opacity remains independently adjustable; changing it preserves the connecting outline.
+
 Composer Options → Context Information and Preferences → Input → Composer Context contain saved, application-wide toggles for the whole context strip and each indicator. The compact icon/text indicators wrap in narrow panes, inherit Composer styling and expose details on hover. Available fields are:
 
 - Working directory, abbreviated under the home directory.

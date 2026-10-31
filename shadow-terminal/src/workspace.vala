@@ -1,4 +1,22 @@
 namespace Shadow {
+    // Clip only the content's lower corners. The workspace paints its frame
+    // after the native headerbar and content, in one coordinate space.
+    public class PaneBody : Gtk.Box {
+        public const float RADIUS = 8;
+
+        public PaneBody () { Object (orientation: Gtk.Orientation.VERTICAL, hexpand: true, vexpand: true); }
+
+        public override void snapshot (Gtk.Snapshot snapshot) {
+            Graphene.Rect bounds = {}; bounds.init (0, 0, get_width (), get_height ());
+            Graphene.Size square = {}, round = {};
+            square.init (0, 0); round.init (RADIUS, RADIUS);
+            Gsk.RoundedRect clip = {}; clip.init (bounds, square, square, round, round);
+            snapshot.push_rounded_clip (clip);
+            base.snapshot (snapshot);
+            snapshot.pop ();
+        }
+    }
+
     // Layout nodes contain live widgets, never another terminal stream. Moving
     // a leaf therefore preserves its emulator, PTY, pending input and draft.
     public class SessionTab : Gtk.Box {
@@ -64,9 +82,11 @@ namespace Shadow {
     public class WorkspaceWindow : Gtk.ApplicationWindow {
         private weak Host host;
         private Gtk.Stack pages = new Gtk.Stack ();
+        private PaneBody pane_body = new PaneBody ();
         private Gtk.Stack menus = new Gtk.Stack ();
         private Gtk.Box tabs = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 0) {homogeneous = true};
         private Gtk.ScrolledWindow tab_scroll;
+        private PaneTabStrip strip;
         private List<TerminalSession> sessions = new List<TerminalSession> ();
         private HashTable<SessionTab, Gtk.Box> tab_widgets = new HashTable<SessionTab, Gtk.Box> (direct_hash, direct_equal);
         private List<SessionTab> layouts = new List<SessionTab> ();
@@ -106,6 +126,7 @@ namespace Shadow {
             preferences_handler = host.preferences.changed.connect (() => {
                 string binding = host.preferences.shortcut_label ("new-tab");
                 create.tooltip_text = "New Tab" + (binding == "" ? "" : " (" + binding + ")");
+                queue_draw ();
             });
             ((Gtk.Widget) this).unrealize.connect (() => {
                 if (preferences_handler != 0) { host.preferences.disconnect (preferences_handler); preferences_handler = 0; }
@@ -115,7 +136,7 @@ namespace Shadow {
             tab_scroll = new Gtk.ScrolledWindow () {child = tabs, hexpand = true,
                 hscrollbar_policy = Gtk.PolicyType.EXTERNAL, vscrollbar_policy = Gtk.PolicyType.NEVER,
                 propagate_natural_width = false};
-            var strip = new PaneTabStrip ();
+            strip = new PaneTabStrip () {draw_liner = false};
             strip.margin_start = 6; strip.margin_end = 6;
             strip.append (create); strip.append (tab_scroll);
             header.title_widget = strip;
@@ -125,8 +146,9 @@ namespace Shadow {
             pages.hexpand = true;
             pages.transition_type = Gtk.StackTransitionType.NONE;
             pages.hhomogeneous = false; pages.vhomogeneous = false;
-            child = pages;
-            pages.add_css_class ("pane-liner");
+            pane_body.append (pages);
+            child = pane_body;
+            pane_body.add_css_class ("pane-liner");
             close_request.connect (() => { close_workspace (); return true; });
             map.connect (() => {
                 if (placed) return;
@@ -158,6 +180,59 @@ namespace Shadow {
             });
             keys.key_released.connect ((key, code, state) => host.cycle_key_released (key, state));
             ((Gtk.Widget) this).add_controller (keys);
+            tab_scroll.hadjustment.value_changed.connect (() => queue_draw ());
+        }
+
+        public override void snapshot (Gtk.Snapshot snapshot) {
+            base.snapshot (snapshot);
+            Graphene.Rect body = {}, header = {}, viewport = {}, selected = {};
+            if (!pane_body.compute_bounds (this, out body) || !strip.compute_bounds (this, out header)
+                || !tab_scroll.compute_bounds (this, out viewport)) return;
+            double left = body.origin.x + 0.5, right = body.origin.x + body.size.width - 0.5;
+            double bottom = body.origin.y + body.size.height - 0.5;
+            double join = header.origin.y + header.size.height - 0.5;
+            double radius = PaneBody.RADIUS - 0.5;
+            if (right <= left || bottom <= join + radius) return;
+            bool has_tab = false;
+            for (var widget = tabs.get_first_child (); widget != null; widget = widget.get_next_sibling ()) {
+                if (widget is PaneTab && ((PaneTab) widget).selected) {
+                    has_tab = widget.compute_bounds (this, out selected);
+                    break;
+                }
+            }
+            double clip_left = double.max (left, viewport.origin.x);
+            double clip_right = double.min (right, viewport.origin.x + viewport.size.width);
+            double gap_left = double.max (clip_left, selected.origin.x);
+            double gap_right = double.min (clip_right, selected.origin.x + selected.size.width - 1);
+            has_tab = has_tab && gap_right > gap_left;
+            Graphene.Rect bounds = {}; bounds.init (0, 0, get_width (), get_height ());
+            var context = snapshot.append_cairo (bounds);
+            bool dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+            var color = host.preferences.pane_foreground (dark);
+            // Composite the complete contour once: overlapping joins and
+            // clipped tab endpoints must not accumulate translucent alpha.
+            context.push_group ();
+            context.set_source_rgb (color.red, color.green, color.blue);
+            context.set_line_width (1);
+            context.move_to (has_tab ? gap_left : right, join);
+            context.line_to (left, join);
+            context.line_to (left, bottom - radius);
+            context.arc_negative (left + radius, bottom - radius, radius, Math.PI, Math.PI / 2);
+            context.line_to (right - radius, bottom);
+            context.arc_negative (right - radius, bottom - radius, radius, Math.PI / 2, 0);
+            context.line_to (right, join);
+            if (has_tab) context.line_to (gap_right, join);
+            context.stroke ();
+            if (has_tab) {
+                context.save ();
+                context.rectangle (clip_left, header.origin.y, clip_right - clip_left, header.size.height);
+                context.clip ();
+                PaneTab.outline (context, selected.origin.x, selected.origin.y, selected.size.width, selected.size.height);
+                context.stroke ();
+                context.restore ();
+            }
+            context.pop_group_to_source ();
+            context.paint_with_alpha (0.3);
         }
 
         public void add_session (TerminalSession session, TerminalSession? relative = null, Gtk.Orientation orientation = Gtk.Orientation.HORIZONTAL) {
@@ -170,7 +245,7 @@ namespace Shadow {
                 tab = new SessionTab (session);
                 layouts.append (tab);
                 pages.add_named (tab, session.request.session);
-                var row = new PaneTab (session.request.session, "Close Tab");
+                var row = new PaneTab (session.request.session, "Close Tab") {draw_outline = false};
                 row.activated.connect (() => { if (tab.active != null) select_session (tab.active); });
                 row.closed.connect (() => close_tab (tab));
                 tabs.append (row); tab_widgets.insert (tab, row);
@@ -178,6 +253,7 @@ namespace Shadow {
             session_tabs.insert (session, tab);
             menus.add_named (session.menu, session.request.session);
             update_session (session);
+            queue_draw ();
         }
 
         public bool contains_visible (TerminalSession session) {
@@ -217,6 +293,7 @@ namespace Shadow {
             }
             update_session (session);
             if (focus) session.focus_input ();
+            queue_draw ();
             Idle.add (() => {
                 var row = tab_widgets.lookup (tab);
                 Graphene.Rect bounds = {};

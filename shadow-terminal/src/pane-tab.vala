@@ -2,6 +2,7 @@ namespace Shadow {
     // The liner belongs to the host strip and leaves the selected tab open to
     // its content, including when the tabs sit inside a scrolling container.
     public class PaneTabStrip : Gtk.Box {
+        public bool draw_liner { get; set; default = true; }
         public PaneTabStrip () {
             Object (orientation: Gtk.Orientation.HORIZONTAL, spacing: 0, hexpand: true);
             add_css_class ("pane-tab-strip");
@@ -16,6 +17,7 @@ namespace Shadow {
         }
 
         public override void snapshot (Gtk.Snapshot snapshot) {
+            if (!draw_liner) { base.snapshot (snapshot); return; }
             Graphene.Rect bounds = {}; bounds.init (0, 0, get_width (), get_height ());
             var context = snapshot.append_cairo (bounds);
             var color = get_color ();
@@ -37,6 +39,7 @@ namespace Shadow {
     // This widget owns presentation and gestures, never the hosted content or
     // its lifetime. Terminal and documentation hosts interpret these signals.
     public class PaneTab : Gtk.Box {
+        public bool draw_outline { get; set; default = true; }
         public Gtk.ToggleButton selector;
         private Gtk.Label label;
         public signal void activated ();
@@ -69,19 +72,22 @@ namespace Shadow {
             }
         }
 
-        public override void snapshot (Gtk.Snapshot snapshot) {
-            Graphene.Rect bounds = {}; bounds.init (0, 0, get_width (), get_height ());
-            var context = snapshot.append_cairo (bounds);
-            var color = get_color ();
-            double width = get_width (), height = get_height ();
+        public static void outline (Cairo.Context context, double x, double y, double width, double height) {
             double slope = double.min (12, height / 3);
             double radius = double.min (8, height / 4);
-            context.move_to (0, height - 0.5);
-            context.line_to (slope, 1);
-            context.line_to (width - radius - 1, 1);
-            context.arc (width - radius - 1, radius + 1, radius, -Math.PI / 2, 0);
-            context.line_to (width - 1, height - 0.5);
-            if (selected) {
+            context.move_to (x, y + height - 0.5);
+            context.line_to (x + slope, y + 1);
+            context.line_to (x + width - radius - 1, y + 1);
+            context.arc (x + width - radius - 1, y + radius + 1, radius, -Math.PI / 2, 0);
+            context.line_to (x + width - 1, y + height - 0.5);
+        }
+
+        public override void snapshot (Gtk.Snapshot snapshot) {
+            if (selected && draw_outline) {
+                Graphene.Rect bounds = {}; bounds.init (0, 0, get_width (), get_height ());
+                var context = snapshot.append_cairo (bounds);
+                var color = get_color ();
+                outline (context, 0, 0, get_width (), get_height ());
                 context.set_source_rgba (color.red, color.green, color.blue, 0.3);
                 context.set_line_width (1); context.stroke ();
             }

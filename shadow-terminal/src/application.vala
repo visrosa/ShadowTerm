@@ -1119,7 +1119,7 @@ namespace Shadow {
                 .workspace-tab { border-radius: 0; background: transparent; }
                 .workspace-tab.selected { background: transparent; }
                 .pane-tab-strip { padding: 0 12px; }
-                .pane-liner { border: 1px solid alpha(%s, 0.3); border-top: none; border-radius: 0 0 8px 8px; margin: 0 6px 6px; }
+                .pane-liner { padding: 0 1px 1px; margin: 0 6px 6px; }
                 .workspace-tab > button { color: inherit; padding: 4px 8px; min-width: 0; }
                 .workspace-tab > button:checked { background: transparent; box-shadow: none; }
                 .shadow-composer { background-color: @theme_bg_color; color: @theme_fg_color;
@@ -1129,7 +1129,7 @@ namespace Shadow {
                 .shadow-composer.inherit-pane-style { background-color: %s; color: %s; }
                 .shadow-composer.inherit-pane-style textview.composer-input,
                 .shadow-composer.inherit-pane-style textview.composer-input text { color: %s; caret-color: %s; }
-            """.printf (header_background, header_foreground, header_background, header_foreground, header_foreground, header_foreground, background, foreground, foreground, foreground));
+            """.printf (header_background, header_foreground, header_background, header_foreground, header_foreground, background, foreground, foreground, foreground));
         }
 
         public TerminalSession shell_window (string session, int pid) throws IOError {
